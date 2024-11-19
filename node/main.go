@@ -28,17 +28,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.uber.org/zap"
-	"golang.org/x/crypto/sha3"
-	"google.golang.org/protobuf/proto"
-	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token"
-	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token/application"
-	"source.quilibrium.com/quilibrium/monorepo/node/p2p"
-	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
-	"source.quilibrium.com/quilibrium/monorepo/node/store"
-	"source.quilibrium.com/quilibrium/monorepo/node/tries"
-	"source.quilibrium.com/quilibrium/monorepo/node/utils"
-
 	"github.com/cloudflare/circl/sign/ed448"
 	"github.com/iden3/go-iden3-crypto/poseidon"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -46,11 +35,22 @@ import (
 	"github.com/pbnjay/memory"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/zap"
+	"golang.org/x/crypto/sha3"
+	"google.golang.org/protobuf/proto"
 	"source.quilibrium.com/quilibrium/monorepo/node/app"
 	"source.quilibrium.com/quilibrium/monorepo/node/config"
 	qcrypto "source.quilibrium.com/quilibrium/monorepo/node/crypto"
 	"source.quilibrium.com/quilibrium/monorepo/node/crypto/kzg"
+	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token"
+	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token/application"
+	qruntime "source.quilibrium.com/quilibrium/monorepo/node/internal/runtime"
+	"source.quilibrium.com/quilibrium/monorepo/node/p2p"
+	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
 	"source.quilibrium.com/quilibrium/monorepo/node/rpc"
+	"source.quilibrium.com/quilibrium/monorepo/node/store"
+	"source.quilibrium.com/quilibrium/monorepo/node/tries"
+	"source.quilibrium.com/quilibrium/monorepo/node/utils"
 )
 
 var (
@@ -384,23 +384,24 @@ func main() {
 		return
 	}
 
+	if nodeConfig.Engine.DataWorkerBaseListenMultiaddr == "" {
+		nodeConfig.Engine.DataWorkerBaseListenMultiaddr = "/ip4/127.0.0.1/tcp/%d"
+	}
+	if nodeConfig.Engine.DataWorkerBaseListenPort == 0 {
+		nodeConfig.Engine.DataWorkerBaseListenPort = 40000
+	}
+	if nodeConfig.Engine.DataWorkerMemoryLimit == 0 {
+		nodeConfig.Engine.DataWorkerMemoryLimit = 1792 * 1024 * 1024 // 1.75GiB
+	}
+	if len(nodeConfig.Engine.DataWorkerMultiaddrs) == 0 {
+		nodeConfig.Engine.DataWorkerCount = qruntime.WorkerCount(
+			nodeConfig.Engine.DataWorkerCount, true,
+		)
+	}
+
 	if *core != 0 {
-		// runtime.GOMAXPROCS(2)
 		rdebug.SetGCPercent(9999)
-
-		if nodeConfig.Engine.DataWorkerMemoryLimit == 0 {
-			nodeConfig.Engine.DataWorkerMemoryLimit = 1792 * 1024 * 1024 // 1.75GiB
-		}
-
 		rdebug.SetMemoryLimit(nodeConfig.Engine.DataWorkerMemoryLimit)
-
-		if nodeConfig.Engine.DataWorkerBaseListenMultiaddr == "" {
-			nodeConfig.Engine.DataWorkerBaseListenMultiaddr = "/ip4/127.0.0.1/tcp/%d"
-		}
-
-		if nodeConfig.Engine.DataWorkerBaseListenPort == 0 {
-			nodeConfig.Engine.DataWorkerBaseListenPort = 40000
-		}
 
 		if *parentProcess == 0 && len(nodeConfig.Engine.DataWorkerMultiaddrs) == 0 {
 			panic("parent process pid not specified")
@@ -437,6 +438,27 @@ func main() {
 			panic(err)
 		}
 		return
+	} else {
+		totalMemory := int64(memory.TotalMemory())
+		dataWorkerReservedMemory := int64(0)
+		if len(nodeConfig.Engine.DataWorkerMultiaddrs) == 0 {
+			dataWorkerReservedMemory = nodeConfig.Engine.DataWorkerMemoryLimit * int64(nodeConfig.Engine.DataWorkerCount)
+		}
+		switch availableOverhead := totalMemory - dataWorkerReservedMemory; {
+		case totalMemory < dataWorkerReservedMemory:
+			fmt.Println("The memory allocated to data workers exceeds the total system memory.")
+			fmt.Println("You are at risk of running out of memory during runtime.")
+		case availableOverhead < 8*1024*1024*1024:
+			fmt.Println("The memory available to the node, unallocated to the data workers, is less than 8GiB.")
+			fmt.Println("You are at risk of running out of memory during runtime.")
+		default:
+			if _, explicitGOGC := os.LookupEnv("GOGC"); !explicitGOGC {
+				rdebug.SetGCPercent(9999)
+			}
+			if _, explicitGOMEMLIMIT := os.LookupEnv("GOMEMLIMIT"); !explicitGOMEMLIMIT {
+				rdebug.SetMemoryLimit(availableOverhead * 8 / 10)
+			}
+		}
 	}
 
 	fmt.Println("Loading ceremony state and starting node...")
@@ -533,11 +555,10 @@ func spawnDataWorkers(nodeConfig *config.Config) {
 		panic(err)
 	}
 
-	cores := runtime.GOMAXPROCS(0)
-	dataWorkers = make([]*exec.Cmd, cores-1)
-	fmt.Printf("Spawning %d data workers...\n", cores-1)
+	dataWorkers = make([]*exec.Cmd, nodeConfig.Engine.DataWorkerCount)
+	fmt.Printf("Spawning %d data workers...\n", nodeConfig.Engine.DataWorkerCount)
 
-	for i := 1; i <= cores-1; i++ {
+	for i := 1; i <= nodeConfig.Engine.DataWorkerCount; i++ {
 		i := i
 		go func() {
 			for {
