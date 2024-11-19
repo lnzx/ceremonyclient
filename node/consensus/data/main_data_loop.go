@@ -69,7 +69,7 @@ func (e *DataClockConsensusEngine) runFramePruning() {
 			}
 
 			if head.FrameNumber < uint64(e.config.Engine.MaxFrames)+1 ||
-				head.FrameNumber <= application.PROOF_FRAME_SENIORITY_REPAIR {
+				head.FrameNumber <= application.PROOF_FRAME_SENIORITY_REPAIR+1 {
 				continue
 			}
 
