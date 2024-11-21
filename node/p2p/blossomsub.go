@@ -5,15 +5,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"math/bits"
 	"net"
-	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,12 +16,14 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	libp2pconfig "github.com/libp2p/go-libp2p/config"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	"github.com/libp2p/go-libp2p/p2p/host/eventbus"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	routedhost "github.com/libp2p/go-libp2p/p2p/host/routed"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
@@ -35,7 +32,6 @@ import (
 	"github.com/mr-tron/base58"
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
-	mn "github.com/multiformats/go-multiaddr/net"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -77,6 +73,7 @@ type BlossomSub struct {
 	peerScore   map[string]int64
 	peerScoreMx sync.Mutex
 	network     uint8
+	bootstrap   internal.PeerConnector
 	discovery   internal.PeerConnector
 }
 
@@ -188,6 +185,8 @@ func NewBlossomSub(
 
 	opts := []libp2pconfig.Option{
 		libp2p.ListenAddrStrings(p2pConfig.ListenMultiaddr),
+		libp2p.EnableNATService(),
+		libp2p.NATPortMap(),
 	}
 
 	isBootstrapPeer := false
@@ -315,6 +314,35 @@ func NewBlossomSub(
 
 	logger.Info("established peer id", zap.String("peer_id", h.ID().String()))
 
+	reachabilitySub, err := h.EventBus().Subscribe(&event.EvtLocalReachabilityChanged{}, eventbus.Name("blossomsub"))
+	if err != nil {
+		panic(err)
+	}
+	go func() {
+		defer reachabilitySub.Close()
+		logger := logger.Named("reachability")
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-reachabilitySub.Out():
+				if !ok {
+					return
+				}
+				switch state := evt.(event.EvtLocalReachabilityChanged).Reachability; state {
+				case network.ReachabilityPublic:
+					logger.Info("node is externally reachable")
+				case network.ReachabilityPrivate:
+					logger.Info("node is not externally reachable")
+				case network.ReachabilityUnknown:
+					logger.Info("node reachability is unknown")
+				default:
+					logger.Debug("unknown reachability state", zap.Any("state", state))
+				}
+			}
+		}
+	}()
+
 	kademliaDHT := initDHT(
 		ctx,
 		logger,
@@ -327,8 +355,6 @@ func NewBlossomSub(
 
 	routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
 	util.Advertise(ctx, routingDiscovery, getNetworkNamespace(p2pConfig.Network))
-
-	verifyReachability(p2pConfig)
 
 	minBootstrapPeers := min(len(bootstrappers), p2pConfig.MinBootstrapPeers)
 	bootstrap := internal.NewPeerConnector(
@@ -352,6 +378,7 @@ func NewBlossomSub(
 		),
 		bootstrap,
 	)
+	bs.bootstrap = bootstrap
 
 	discovery := internal.NewPeerConnector(
 		ctx,
@@ -731,8 +758,12 @@ func (b *BlossomSub) Reconnect(peerId []byte) error {
 	return nil
 }
 
-func (b *BlossomSub) DiscoverPeers() error {
-	return b.discovery.Connect(b.ctx)
+func (b *BlossomSub) Bootstrap(ctx context.Context) error {
+	return b.bootstrap.Connect(ctx)
+}
+
+func (b *BlossomSub) DiscoverPeers(ctx context.Context) error {
+	return b.discovery.Connect(ctx)
 }
 
 func (b *BlossomSub) GetPeerScore(peerId []byte) int64 {
@@ -838,53 +869,77 @@ func (b *BlossomSub) StartDirectChannelListener(
 	return errors.Wrap(server.Serve(bind), "start direct channel listener")
 }
 
-func (b *BlossomSub) GetDirectChannel(key []byte, purpose string) (
-	dialCtx *grpc.ClientConn,
-	err error,
+type extraCloseConn struct {
+	net.Conn
+	extraClose func()
+}
+
+func (c *extraCloseConn) Close() error {
+	err := c.Conn.Close()
+	c.extraClose()
+	return err
+}
+
+func (b *BlossomSub) GetDirectChannel(peerID []byte, purpose string) (
+	cc *grpc.ClientConn, err error,
 ) {
 	// Kind of a weird hack, but gostream can induce panics if the peer drops at
 	// the time of connection, this avoids the problem.
 	defer func() {
 		if r := recover(); r != nil {
-			dialCtx = nil
+			cc = nil
 			err = errors.New("connection failed")
 		}
 	}()
 
+	id := peer.ID(peerID)
+
 	// Open question: should we prefix this so a node can run both in mainnet and
 	// testnet? Feels like a bad idea and would be preferable to discourage.
-	dialCtx, err = qgrpc.DialContext(
+	cc, err = qgrpc.DialContext(
 		b.ctx,
-		base58.Encode(key),
-		grpc.WithDialer(
-			func(peerIdStr string, timeout time.Duration) (net.Conn, error) {
-				subCtx, subCtxCancel := context.WithTimeout(b.ctx, timeout)
-				defer subCtxCancel()
-
-				id, err := peer.Decode(peerIdStr)
-				if err != nil {
-					return nil, errors.Wrap(err, "dial context")
+		"passthrough:///",
+		grpc.WithContextDialer(
+			func(ctx context.Context, _ string) (net.Conn, error) {
+				// If we are not already connected to the peer, we will manually dial it
+				// before opening the direct channel. We will close the peer connection
+				// when the direct channel is closed.
+				alreadyConnected := false
+				switch connectedness := b.h.Network().Connectedness(id); connectedness {
+				case network.Connected, network.Limited:
+					alreadyConnected = true
+				default:
+					if err := b.h.Connect(ctx, peer.AddrInfo{ID: id}); err != nil {
+						return nil, errors.Wrap(err, "connect")
+					}
 				}
-
 				c, err := gostream.Dial(
-					subCtx,
+					network.WithNoDial(ctx, "direct-channel"),
 					b.h,
-					peer.ID(key),
+					id,
 					protocol.ID(
-						"/p2p/direct-channel/"+peer.ID(id).String()+purpose,
+						"/p2p/direct-channel/"+id.String()+purpose,
 					),
 				)
-
-				return c, errors.Wrap(err, "dial context")
+				if err != nil {
+					return nil, errors.Wrap(err, "dial direct channel")
+				}
+				if alreadyConnected {
+					return c, nil
+				}
+				return &extraCloseConn{
+					Conn:       c,
+					extraClose: func() { _ = b.h.Network().ClosePeer(id) },
+				}, nil
 			},
 		),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, "get direct channel")
+		return nil, errors.Wrap(err, "dial context")
 	}
 
-	return dialCtx, nil
+	return cc, nil
 }
 
 func (b *BlossomSub) GetPublicKey() []byte {
@@ -895,101 +950,6 @@ func (b *BlossomSub) GetPublicKey() []byte {
 func (b *BlossomSub) SignMessage(msg []byte) ([]byte, error) {
 	sig, err := b.signKey.Sign(msg)
 	return sig, errors.Wrap(err, "sign message")
-}
-
-type ReachabilityRequest struct {
-	Port uint16 `json:"port"`
-	Type string `json:"type"`
-}
-
-type ReachabilityResponse struct {
-	Reachable bool   `json:"reachable"`
-	Error     string `json:"error"`
-}
-
-func verifyReachability(cfg *config.P2PConfig) bool {
-	a, err := ma.NewMultiaddr(cfg.ListenMultiaddr)
-	if err != nil {
-		return false
-	}
-
-	transport, addr, err := mn.DialArgs(a)
-	if err != nil {
-		return false
-	}
-
-	addrparts := strings.Split(addr, ":")
-	if len(addrparts) != 2 {
-		return false
-	}
-
-	port, err := strconv.ParseUint(addrparts[1], 10, 0)
-	if err != nil {
-		return false
-	}
-
-	if !strings.Contains(transport, "tcp") {
-		transport = "quic"
-	} else {
-		transport = "tcp"
-	}
-
-	req := &ReachabilityRequest{
-		Port: uint16(port),
-		Type: transport,
-	}
-
-	b, err := json.Marshal(req)
-	if err != nil {
-		return false
-	}
-
-	resp, err := http.Post(
-		"https://rpc.quilibrium.com/connectivity-check",
-		"application/json",
-		bytes.NewBuffer(b),
-	)
-	if err != nil {
-		fmt.Println("Reachability check not currently available, skipping test.")
-		return true
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		fmt.Println("Reachability check not currently available, skipping test.")
-		return true
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("Reachability check not currently available, skipping test.")
-		return true
-	}
-
-	r := &ReachabilityResponse{}
-	err = json.Unmarshal(bodyBytes, r)
-	if err != nil {
-		fmt.Println("Reachability check not currently available, skipping test.")
-		return true
-	}
-
-	if r.Error != "" {
-		fmt.Println("Reachability check failed: " + r.Error)
-		if transport == "quic" {
-			fmt.Println("WARNING!")
-			fmt.Println("WARNING!")
-			fmt.Println("WARNING!")
-			fmt.Println("You failed reachability with QUIC enabled. Consider switching to TCP")
-			fmt.Println("WARNING!")
-			fmt.Println("WARNING!")
-			fmt.Println("WARNING!")
-			time.Sleep(5 * time.Second)
-		}
-		return false
-	}
-
-	fmt.Println("Node passed reachability check.")
-	return true
 }
 
 func withDefaults(p2pConfig *config.P2PConfig) *config.P2PConfig {
