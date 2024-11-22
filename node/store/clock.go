@@ -1058,7 +1058,7 @@ func (p *PebbleClockStore) DeleteDataClockFrameRange(
 	for i := fromFrameNumber; i < toFrameNumber; i++ {
 		frames, err := p.GetStagedDataClockFramesForFrameNumber(filter, i)
 		if err != nil {
-			return errors.Wrap(err, "delete data clock frame range")
+			continue
 		}
 
 		for _, frame := range frames {
