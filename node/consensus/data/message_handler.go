@@ -3,6 +3,7 @@ package data
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/iden3/go-iden3-crypto/poseidon"
@@ -13,14 +14,15 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"source.quilibrium.com/quilibrium/monorepo/node/config"
-	"source.quilibrium.com/quilibrium/monorepo/node/consensus"
 	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token/application"
 	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
 )
 
 func (e *DataClockConsensusEngine) runFrameMessageHandler() {
-	for e.GetState() < consensus.EngineStateStopping {
+	for {
 		select {
+		case <-e.ctx.Done():
+			return
 		case message := <-e.frameMessageProcessorCh:
 			e.logger.Debug("handling frame message")
 			msg := &protobufs.Message{}
@@ -49,26 +51,26 @@ func (e *DataClockConsensusEngine) runFrameMessageHandler() {
 				continue
 			}
 
-			go func() {
-				switch any.TypeUrl {
-				case protobufs.ClockFrameType:
-					if err := e.handleClockFrameData(
-						message.From,
-						msg.Address,
-						any,
-						false,
-					); err != nil {
-						return
-					}
+			switch any.TypeUrl {
+			case protobufs.ClockFrameType:
+				if err := e.handleClockFrameData(
+					message.From,
+					msg.Address,
+					any,
+					false,
+				); err != nil {
+					e.logger.Debug("could not handle clock frame data", zap.Error(err))
 				}
-			}()
+			}
 		}
 	}
 }
 
 func (e *DataClockConsensusEngine) runTxMessageHandler() {
-	for e.GetState() < consensus.EngineStateStopping {
+	for {
 		select {
+		case <-e.ctx.Done():
+			return
 		case message := <-e.txMessageProcessorCh:
 			e.logger.Debug("handling tx message")
 			msg := &protobufs.Message{}
@@ -97,9 +99,12 @@ func (e *DataClockConsensusEngine) runTxMessageHandler() {
 			}
 
 			if e.frameProverTries[0].Contains(e.provingKeyAddress) {
+				wg := &sync.WaitGroup{}
 				for name := range e.executionEngines {
 					name := name
+					wg.Add(1)
 					go func() error {
+						defer wg.Done()
 						messages, err := e.executionEngines[name].ProcessMessage(
 							application.TOKEN_ADDRESS,
 							msg,
@@ -125,18 +130,17 @@ func (e *DataClockConsensusEngine) runTxMessageHandler() {
 								continue
 							}
 
-							e.logger.Debug(appMsg.TypeUrl)
-
 							switch appMsg.TypeUrl {
 							case protobufs.TokenRequestType:
 								t := &protobufs.TokenRequest{}
 								err := proto.Unmarshal(appMsg.Value, t)
 								if err != nil {
+									e.logger.Debug("could not unmarshal token request", zap.Error(err))
 									continue
 								}
 
 								if err := e.handleTokenRequest(t); err != nil {
-									continue
+									e.logger.Debug("could not handle token request", zap.Error(err))
 								}
 							}
 						}
@@ -144,14 +148,17 @@ func (e *DataClockConsensusEngine) runTxMessageHandler() {
 						return nil
 					}()
 				}
+				wg.Wait()
 			}
 		}
 	}
 }
 
 func (e *DataClockConsensusEngine) runInfoMessageHandler() {
-	for e.GetState() < consensus.EngineStateStopping {
+	for {
 		select {
+		case <-e.ctx.Done():
+			return
 		case message := <-e.infoMessageProcessorCh:
 			e.logger.Debug("handling info message")
 			msg := &protobufs.Message{}
@@ -180,18 +187,16 @@ func (e *DataClockConsensusEngine) runInfoMessageHandler() {
 				continue
 			}
 
-			go func() {
-				switch any.TypeUrl {
-				case protobufs.DataPeerListAnnounceType:
-					if err := e.handleDataPeerListAnnounce(
-						message.From,
-						msg.Address,
-						any,
-					); err != nil {
-						return
-					}
+			switch any.TypeUrl {
+			case protobufs.DataPeerListAnnounceType:
+				if err := e.handleDataPeerListAnnounce(
+					message.From,
+					msg.Address,
+					any,
+				); err != nil {
+					e.logger.Debug("could not handle data peer list announce", zap.Error(err))
 				}
-			}()
+			}
 		}
 	}
 }
@@ -249,7 +254,7 @@ func (e *DataClockConsensusEngine) handleClockFrame(
 	}
 
 	if frame.FrameNumber > head.FrameNumber {
-		e.dataTimeReel.Insert(frame, false)
+		e.dataTimeReel.Insert(e.ctx, frame, false)
 	}
 
 	return nil
