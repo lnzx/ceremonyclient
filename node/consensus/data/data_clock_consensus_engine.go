@@ -563,6 +563,9 @@ func (e *DataClockConsensusEngine) PerformTimeProof(
 			})
 		}
 	}
+	if len(actives) < 3 {
+		return []mt.DataBlock{}
+	}
 	output := make([]mt.DataBlock, len(actives))
 	e.logger.Info(
 		"creating data shard ring proof",

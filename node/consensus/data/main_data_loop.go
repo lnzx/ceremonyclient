@@ -292,7 +292,7 @@ func (e *DataClockConsensusEngine) processFrame(
 
 				outputs := e.PerformTimeProof(latestFrame, latestFrame.Difficulty, ring)
 				if outputs == nil || len(outputs) < 3 {
-					e.logger.Error("could not successfully build proof, reattempting")
+					e.logger.Info("workers not yet available for proving")
 					return latestFrame
 				}
 				modulo := len(outputs)
