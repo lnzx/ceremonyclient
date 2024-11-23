@@ -154,7 +154,7 @@ func TestBasicSeqnoValidatorReplay(t *testing.T) {
 	}
 
 	for _, sub := range msgs {
-		assertNeverReceives(t, sub, time.Second)
+		assertNeverReceives(t, []*Subscription{sub}, time.Second)
 	}
 }
 
