@@ -1110,6 +1110,9 @@ func (p *PubSub) handleIncomingRPC(rpc *RPC) {
 
 	for _, subopt := range subs {
 		t := subopt.GetBitmask()
+		if !p.peerFilter(rpc.from, subopt.Bitmask) {
+			continue
+		}
 
 		if subopt.GetSubscribe() {
 			tmap, ok := p.bitmasks[string(t)]
