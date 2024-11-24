@@ -1195,22 +1195,13 @@ func (bs *BlossomSubRouter) Publish(msg *Message) {
 
 	from := msg.ReceivedFrom
 	bitmask := msg.GetBitmask()
+	originalSender := peer.ID(msg.GetFrom())
+	mid := string(bs.p.idGen.ID(msg))
 
-	tosend := make(map[peer.ID]struct{})
+	var toSendAll []map[peer.ID]struct{}
+	for _, bitmask := range SliceBitmask(bitmask) {
+		tosend := make(map[peer.ID]struct{})
 
-	sliced := SliceBitmask(bitmask)
-	// bloom publish:
-	if len(sliced) != 1 {
-		// any peers in all slices of the bitmask?
-		peers := bs.p.getPeersInBitmask(bitmask)
-		if len(peers) == 0 {
-			return
-		}
-
-		for _, p := range peers {
-			tosend[p] = struct{}{}
-		}
-	} else { // classic gossip mesh
 		// any peers in the bitmask?
 		tmap, ok := bs.p.bitmasks[string(bitmask)]
 		if !ok {
@@ -1264,21 +1255,27 @@ func (bs *BlossomSubRouter) Publish(msg *Message) {
 				tosend[p] = struct{}{}
 			}
 		}
+
+		delete(tosend, from)
+		delete(tosend, originalSender)
+		for p := range tosend {
+			if _, ok := bs.unwanted[p][mid]; ok {
+				delete(tosend, p)
+			}
+		}
+
+		if len(tosend) > 0 {
+			toSendAll = append(toSendAll, tosend)
+		}
 	}
 
+	if len(toSendAll) == 0 {
+		return
+	}
+	toSend := toSendAll[rand.Intn(len(toSendAll))]
+
 	out := rpcWithMessages(msg.Message)
-	for pid := range tosend {
-		if pid == from || pid == peer.ID(msg.GetFrom()) {
-			continue
-		}
-
-		mid := bs.p.idGen.ID(msg)
-		// Check if it has already received an IDONTWANT for the message.
-		// If so, don't send it to the peer
-		if _, ok := bs.unwanted[pid][string(mid)]; ok {
-			continue
-		}
-
+	for pid := range toSend {
 		bs.sendRPC(pid, out, false)
 	}
 }
