@@ -308,8 +308,14 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 		return nil
 	}
 
+	patchVersion := byte(0)
+	if len(p.PatchVersion) == 1 {
+		patchVersion = p.PatchVersion[0]
+	}
+
 	if p.Version != nil &&
-		bytes.Compare(p.Version, config.GetMinimumVersion()) < 0 &&
+		(bytes.Compare(p.Version, config.GetMinimumVersion()) < 0 ||
+			patchVersion < config.GetMinimumPatchVersion()) &&
 		p.Timestamp > config.GetMinimumVersionCutoff().UnixMilli() {
 		e.logger.Debug(
 			"peer provided outdated version, penalizing app score",
@@ -345,6 +351,7 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 		lastSeen:      time.Now().Unix(),
 		timestamp:     p.Timestamp,
 		version:       p.Version,
+		patchVersion:  patchVersion,
 		totalDistance: p.TotalDistance,
 	}
 	e.peerMapMx.Unlock()

@@ -57,6 +57,7 @@ type peerInfo struct {
 	timestamp     int64
 	lastSeen      int64
 	version       []byte
+	patchVersion  byte
 	totalDistance []byte
 }
 
@@ -430,11 +431,12 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 			timestamp := time.Now().UnixMilli()
 			list := &protobufs.DataPeerListAnnounce{
 				Peer: &protobufs.DataPeer{
-					PeerId:    nil,
-					Multiaddr: "",
-					MaxFrame:  frame.FrameNumber,
-					Version:   config.GetVersion(),
-					Timestamp: timestamp,
+					PeerId:       nil,
+					Multiaddr:    "",
+					MaxFrame:     frame.FrameNumber,
+					Version:      config.GetVersion(),
+					PatchVersion: []byte{config.GetPatchNumber()},
+					Timestamp:    timestamp,
 					TotalDistance: e.dataTimeReel.GetTotalDistance().FillBytes(
 						make([]byte, 256),
 					),
@@ -450,11 +452,12 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 
 			e.peerMapMx.Lock()
 			e.peerMap[string(e.pubSub.GetPeerID())] = &peerInfo{
-				peerId:    e.pubSub.GetPeerID(),
-				multiaddr: "",
-				maxFrame:  frame.FrameNumber,
-				version:   config.GetVersion(),
-				timestamp: timestamp,
+				peerId:       e.pubSub.GetPeerID(),
+				multiaddr:    "",
+				maxFrame:     frame.FrameNumber,
+				version:      config.GetVersion(),
+				patchVersion: config.GetPatchNumber(),
+				timestamp:    timestamp,
 				totalDistance: e.dataTimeReel.GetTotalDistance().FillBytes(
 					make([]byte, 256),
 				),

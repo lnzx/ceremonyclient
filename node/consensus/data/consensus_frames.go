@@ -251,7 +251,8 @@ func (e *DataClockConsensusEngine) GetAheadPeers(frameNumber uint64) []internal.
 		if v.timestamp <= config.GetMinimumVersionCutoff().UnixMilli() {
 			continue
 		}
-		if bytes.Compare(v.version, config.GetMinimumVersion()) < 0 {
+		if bytes.Compare(v.version, config.GetMinimumVersion()) < 0 ||
+			v.patchVersion < config.GetMinimumPatchVersion() {
 			continue
 		}
 		maxDiff = max(maxDiff, v.maxFrame-frameNumber)
