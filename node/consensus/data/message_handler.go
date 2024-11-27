@@ -321,7 +321,7 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 			"peer provided outdated version, penalizing app score",
 			zap.String("peer_id", peer.ID(peerID).String()),
 		)
-		e.pubSub.SetPeerScore(peerID, -1000000)
+		e.pubSub.AddPeerScore(peerID, -1000)
 		return nil
 	}
 
@@ -332,7 +332,7 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 	}
 	e.peerMapMx.RUnlock()
 
-	e.pubSub.SetPeerScore(peerID, 10)
+	e.pubSub.AddPeerScore(peerID, 10)
 
 	e.peerMapMx.RLock()
 	existing, ok := e.peerMap[string(peerID)]

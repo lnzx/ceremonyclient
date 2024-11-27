@@ -64,7 +64,8 @@ func (e *DataClockConsensusEngine) validateTxMessage(peerID peer.ID, message *pb
 			}
 			if mint.Signature == nil ||
 				mint.Signature.PublicKey == nil ||
-				mint.Signature.PublicKey.KeyValue == nil {
+				mint.Signature.PublicKey.KeyValue == nil ||
+				len(mint.Signature.PublicKey.KeyValue) > 114 {
 				return p2p.ValidationResultReject
 			}
 			head, err := e.dataTimeReel.Head()
