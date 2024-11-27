@@ -2,6 +2,7 @@ package data
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -381,6 +382,9 @@ func TokenRequestIdentifiers(transition *protobufs.TokenRequest) []string {
 	case *protobufs.TokenRequest_Mint:
 		if len(t.Mint.Proofs) == 1 {
 			return []string{fmt.Sprintf("mint-proof-%x", sha3.Sum512(t.Mint.Proofs[0]))}
+		} else if len(t.Mint.Proofs) >= 3 {
+			frameNumber := binary.BigEndian.Uint64(t.Mint.Proofs[2])
+			return []string{fmt.Sprintf("mint-sign-%d-%x", frameNumber, t.Mint.Signature.PublicKey.KeyValue)}
 		}
 		return []string{fmt.Sprintf("mint-sign-%x", t.Mint.Signature.PublicKey.KeyValue)}
 	case *protobufs.TokenRequest_Announce:

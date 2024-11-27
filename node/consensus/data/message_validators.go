@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/binary"
+	"fmt"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -61,11 +62,34 @@ func (e *DataClockConsensusEngine) validateTxMessage(peerID peer.ID, message *pb
 			if len(mint.Proofs[2]) != 8 {
 				return p2p.ValidationResultReject
 			}
+			if mint.Signature == nil ||
+				mint.Signature.PublicKey == nil ||
+				mint.Signature.PublicKey.KeyValue == nil {
+				return p2p.ValidationResultReject
+			}
 			head, err := e.dataTimeReel.Head()
 			if err != nil {
 				panic(err)
 			}
-			if frameNumber := binary.BigEndian.Uint64(mint.Proofs[2]); frameNumber+2 < head.FrameNumber {
+
+			// cheap hack for handling protobuf trickery: because protobufs can be
+			// serialized in infinite ways, message ids can be regenerated simply by
+			// modifying the data without affecting the underlying signed message.
+			// if this is encountered, go scorched earth on the sender – a thank you
+			// message for destabilizing the network.
+			frameNumber := binary.BigEndian.Uint64(mint.Proofs[2])
+			id := fmt.Sprintf(
+				"mint-sign-%d-%x",
+				frameNumber,
+				mint.Signature.PublicKey.KeyValue,
+			)
+			e.stagedTransactionsMx.RLock()
+			_, ok := e.stagedTransactionsSet[id]
+			e.stagedTransactionsMx.RUnlock()
+			if ok {
+				return p2p.ValidationResultReject
+			}
+			if frameNumber+2 < head.FrameNumber {
 				return p2p.ValidationResultIgnore
 			}
 		}

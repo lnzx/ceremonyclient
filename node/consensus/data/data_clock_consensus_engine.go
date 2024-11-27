@@ -121,7 +121,7 @@ type DataClockConsensusEngine struct {
 	dependencyMapMx                sync.Mutex
 	stagedTransactions             *protobufs.TokenRequests
 	stagedTransactionsSet          map[string]struct{}
-	stagedTransactionsMx           sync.Mutex
+	stagedTransactionsMx           sync.RWMutex
 	peerMapMx                      sync.RWMutex
 	peerAnnounceMapMx              sync.Mutex
 	lastKeyBundleAnnouncementFrame uint64
@@ -270,7 +270,8 @@ func NewDataClockConsensusEngine(
 			rateLimit,
 			time.Minute,
 		),
-		requestSyncCh: make(chan struct{}, 1),
+		requestSyncCh:         make(chan struct{}, 1),
+		stagedTransactionsSet: map[string]struct{}{},
 	}
 
 	logger.Info("constructing consensus engine")
