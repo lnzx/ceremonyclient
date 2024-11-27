@@ -500,6 +500,8 @@ func NewBlossomSub(
 	bs.h = h
 	bs.signKey = privKey
 
+	go bs.background(ctx)
+
 	return bs
 }
 
