@@ -813,6 +813,7 @@ func (b *BlossomSub) GetPeerScore(peerId []byte) int64 {
 	b.peerScoreMx.Lock()
 	peerScore, ok := b.peerScore[string(peerId)]
 	if !ok {
+		b.peerScoreMx.Unlock()
 		return 0
 	}
 	score := peerScore.score
