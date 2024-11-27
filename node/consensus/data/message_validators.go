@@ -83,9 +83,10 @@ func (e *DataClockConsensusEngine) validateTxMessage(peerID peer.ID, message *pb
 				frameNumber,
 				mint.Signature.PublicKey.KeyValue,
 			)
-			e.stagedTransactionsMx.RLock()
-			_, ok := e.stagedTransactionsSet[id]
-			e.stagedTransactionsMx.RUnlock()
+			e.validationFilterMx.Lock()
+			_, ok := e.validationFilter[id]
+			e.validationFilter[id] = struct{}{}
+			e.validationFilterMx.Unlock()
 			if ok {
 				e.pubSub.AddPeerScore([]byte(peerID), -1000000)
 				return p2p.ValidationResultReject

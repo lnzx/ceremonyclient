@@ -145,6 +145,9 @@ func (e *DataClockConsensusEngine) runLoop() {
 			case <-e.ctx.Done():
 				return
 			case dataFrame := <-dataFrameCh:
+				e.validationFilterMx.Lock()
+				e.validationFilter = make(map[string]struct{}, len(e.validationFilter))
+				e.validationFilterMx.Unlock()
 				if e.GetFrameProverTries()[0].Contains(e.provingKeyAddress) {
 					if err = e.publishProof(dataFrame); err != nil {
 						e.logger.Error("could not publish", zap.Error(err))
