@@ -811,12 +811,13 @@ func (b *BlossomSub) DiscoverPeers(ctx context.Context) error {
 
 func (b *BlossomSub) GetPeerScore(peerId []byte) int64 {
 	b.peerScoreMx.Lock()
-	score, ok := b.peerScore[string(peerId)]
+	peerScore, ok := b.peerScore[string(peerId)]
 	if !ok {
 		return 0
 	}
+	score := peerScore.score
 	b.peerScoreMx.Unlock()
-	return int64(score.score)
+	return int64(score)
 }
 
 func (b *BlossomSub) SetPeerScore(peerId []byte, score int64) {
