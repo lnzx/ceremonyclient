@@ -315,8 +315,7 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 	}
 
 	if p.Version != nil &&
-		(bytes.Compare(p.Version, config.GetMinimumVersion()) < 0 ||
-			patchVersion < config.GetMinimumPatchVersion()) &&
+		bytes.Compare(p.Version, config.GetMinimumVersion()) < 0 &&
 		p.Timestamp > config.GetMinimumVersionCutoff().UnixMilli() {
 		e.logger.Debug(
 			"peer provided outdated version, penalizing app score",
