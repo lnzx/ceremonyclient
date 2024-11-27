@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"math/bits"
 	"net"
@@ -620,7 +621,7 @@ func (b *BlossomSub) refreshScores() {
 		}
 
 		pstats.score *= AppDecay
-		if pstats.score < .1 {
+		if math.Abs(pstats.score) < .1 {
 			pstats.score = 0
 		}
 	}
