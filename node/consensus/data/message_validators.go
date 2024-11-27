@@ -88,6 +88,7 @@ func (e *DataClockConsensusEngine) validateTxMessage(peerID peer.ID, message *pb
 			e.stagedTransactionsSet[id] = struct{}{}
 			e.stagedTransactionsMx.Unlock()
 			if ok {
+				e.pubSub.AddPeerScore([]byte(peerID), -1000000)
 				return p2p.ValidationResultReject
 			}
 			if frameNumber+2 < head.FrameNumber {
