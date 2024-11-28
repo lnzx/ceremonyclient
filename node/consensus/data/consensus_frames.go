@@ -116,6 +116,9 @@ func (e *DataClockConsensusEngine) prove(
 		"applied transitions",
 		zap.Int("successful", len(validTransactions.Requests)),
 		zap.Int("failed", len(invalidTransactions.Requests)),
+		zap.Uint64("mint_out_of_order", app.MintOutOfOrder),
+		zap.Uint64("mint_too_old", app.MintTooOld),
+		zap.Uint64("mint_tree_verification_failed", app.MintTreeVerificationFailure),
 	)
 
 	outputState, err := app.MaterializeStateFromApplication()
@@ -219,7 +222,7 @@ func (e *DataClockConsensusEngine) prove(
 }
 
 func (e *DataClockConsensusEngine) GetAheadPeers(frameNumber uint64) []internal.PeerCandidate {
-	if e.GetFrameProverTries()[0].Contains(e.provingKeyAddress) {
+	if e.GetFrameProverTrie(0).Contains(e.provingKeyAddress) {
 		return nil
 	}
 
