@@ -1700,9 +1700,10 @@ func TestBlossomSubEnoughPeers(t *testing.T) {
 	}
 
 	// at this point we have no connections and no mesh, so EnoughPeers should return false
+	// NOTE: EnoughPeers operates with bloom filters, so we need to check for individual filters.
 	res := make(chan bool, 1)
 	psubs[0].eval <- func() {
-		res <- psubs[0].rt.EnoughPeers([]byte{0x00, 0x00, 0x81, 0x00}, 0)
+		res <- psubs[0].rt.EnoughPeers([]byte{0x00, 0x00, 0x80, 0x00}, 0)
 	}
 	enough := <-res
 	if enough {
@@ -1715,7 +1716,7 @@ func TestBlossomSubEnoughPeers(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	psubs[0].eval <- func() {
-		res <- psubs[0].rt.EnoughPeers([]byte{0x00, 0x00, 0x81, 0x00}, 0)
+		res <- psubs[0].rt.EnoughPeers([]byte{0x00, 0x00, 0x80, 0x00}, 0)
 	}
 	enough = <-res
 	if !enough {
@@ -2199,11 +2200,12 @@ func TestBlossomSubLeaveBitmask(t *testing.T) {
 	leaveTime := time.Now()
 	done := make(chan struct{})
 
+	// NOTE: Leave operates with bloom filters, so we need to check for individual filters.
 	psubs[0].rt.(*BlossomSubRouter).p.eval <- func() {
 		defer close(done)
-		psubs[0].rt.Leave([]byte{0x00, 0x00, 0x81, 0x00})
+		psubs[0].rt.Leave([]byte{0x00, 0x00, 0x80, 0x00})
 		time.Sleep(time.Second)
-		peerMap := psubs[0].rt.(*BlossomSubRouter).backoff[string([]byte{0x00, 0x00, 0x81, 0x00})]
+		peerMap := psubs[0].rt.(*BlossomSubRouter).backoff[string([]byte{0x00, 0x00, 0x80, 0x00})]
 		if len(peerMap) != 1 {
 			t.Fatalf("No peer is populated in the backoff map for peer 0")
 		}
@@ -2225,7 +2227,7 @@ func TestBlossomSubLeaveBitmask(t *testing.T) {
 	// for peer 0.
 	psubs[1].rt.(*BlossomSubRouter).p.eval <- func() {
 		defer close(done)
-		peerMap2 := psubs[1].rt.(*BlossomSubRouter).backoff[string([]byte{0x00, 0x00, 0x81, 0x00})]
+		peerMap2 := psubs[1].rt.(*BlossomSubRouter).backoff[string([]byte{0x00, 0x00, 0x80, 0x00})]
 		if len(peerMap2) != 1 {
 			t.Fatalf("No peer is populated in the backoff map for peer 1")
 		}
@@ -2312,7 +2314,7 @@ func (sq *sybilSquatter) handleStream(s network.Stream) {
 
 	// send a subscription for test in the output stream to become candidate for GRAFT
 	// and then just read and ignore the incoming RPCs
-	r := msgio.NewVarintReaderSize(s, DefaultMaxMessageSize)
+	r := msgio.NewVarintReaderSize(s, DefaultHardMaxMessageSize)
 	w := msgio.NewVarintWriter(os)
 	truth := true
 	bitmask := []byte{0x00, 0x00, 0x81, 0x00}
@@ -2532,7 +2534,7 @@ func TestBlossomSubRPCFragmentation(t *testing.T) {
 	// (nMessages * msgSize) / ps.maxMessageSize total RPCs containing the messages we sent IWANTs for.
 	// The actual number will probably be larger, since there's some overhead for the RPC itself, and
 	// we probably aren't packing each RPC to it's maximum size
-	minExpectedRPCS := (nMessages * msgSize) / ps.maxMessageSize
+	minExpectedRPCS := (nMessages * msgSize) / ps.softMaxMessageSize
 	if iwe.rpcsWithMessages < minExpectedRPCS {
 		t.Fatalf("expected to receive at least %d RPCs containing messages, got %d", minExpectedRPCS, iwe.rpcsWithMessages)
 	}
@@ -2561,7 +2563,7 @@ func (iwe *iwantEverything) handleStream(s network.Stream) {
 	gossipMsgIdsReceived := make(map[string]struct{})
 
 	// send a subscription for test in the output stream to become candidate for gossip
-	r := msgio.NewVarintReaderSize(s, DefaultMaxMessageSize)
+	r := msgio.NewVarintReaderSize(s, DefaultHardMaxMessageSize)
 	w := msgio.NewVarintWriter(os)
 	truth := true
 	bitmasks := [][]byte{{0x00, 0x00, 0x80, 0x00}, {0x00, 0x00, 0x01, 0x00}}

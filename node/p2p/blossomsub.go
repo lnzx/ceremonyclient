@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"math/bits"
 	"net"
@@ -60,7 +61,14 @@ const (
 	defaultPingTimeout              = 5 * time.Second
 	defaultPingPeriod               = 30 * time.Second
 	defaultPingAttempts             = 3
+	DecayInterval                   = 10 * time.Second
+	AppDecay                        = .9
 )
+
+type appScore struct {
+	expire time.Time
+	score  float64
+}
 
 type BlossomSub struct {
 	ps          *blossomsub.PubSub
@@ -70,7 +78,7 @@ type BlossomSub struct {
 	bitmaskMap  map[string]*blossomsub.Bitmask
 	h           host.Host
 	signKey     crypto.PrivKey
-	peerScore   map[string]int64
+	peerScore   map[string]*appScore
 	peerScoreMx sync.Mutex
 	network     uint8
 	bootstrap   internal.PeerConnector
@@ -148,7 +156,7 @@ func NewBlossomSubStreamer(
 		logger:     logger,
 		bitmaskMap: make(map[string]*blossomsub.Bitmask),
 		signKey:    privKey,
-		peerScore:  make(map[string]int64),
+		peerScore:  make(map[string]*appScore),
 		network:    p2pConfig.Network,
 	}
 
@@ -302,7 +310,7 @@ func NewBlossomSub(
 		logger:     logger,
 		bitmaskMap: make(map[string]*blossomsub.Bitmask),
 		signKey:    privKey,
-		peerScore:  make(map[string]int64),
+		peerScore:  make(map[string]*appScore),
 		network:    p2pConfig.Network,
 	}
 
@@ -443,7 +451,7 @@ func NewBlossomSub(
 			BehaviourPenaltyWeight:      -10,
 			BehaviourPenaltyThreshold:   100,
 			BehaviourPenaltyDecay:       .5,
-			DecayInterval:               10 * time.Second,
+			DecayInterval:               DecayInterval,
 			DecayToZero:                 .1,
 			RetainScore:                 60 * time.Minute,
 			AppSpecificScore: func(p peer.ID) float64 {
@@ -492,6 +500,8 @@ func NewBlossomSub(
 	bs.peerID = peerID
 	bs.h = h
 	bs.signKey = privKey
+
+	go bs.background(ctx)
 
 	return bs
 }
@@ -584,6 +594,39 @@ func resourceManager(highWatermark int, allowed []peer.AddrInfo) (
 	}
 
 	return mgr, nil
+}
+
+func (b *BlossomSub) background(ctx context.Context) {
+	refreshScores := time.NewTicker(DecayInterval)
+	defer refreshScores.Stop()
+
+	for {
+		select {
+		case <-refreshScores.C:
+			b.refreshScores()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (b *BlossomSub) refreshScores() {
+	b.peerScoreMx.Lock()
+
+	now := time.Now()
+	for p, pstats := range b.peerScore {
+		if now.After(pstats.expire) {
+			delete(b.peerScore, p)
+			continue
+		}
+
+		pstats.score *= AppDecay
+		if math.Abs(pstats.score) < .1 {
+			pstats.score = 0
+		}
+	}
+
+	b.peerScoreMx.Unlock()
 }
 
 func (b *BlossomSub) PublishToBitmask(bitmask []byte, data []byte) error {
@@ -768,23 +811,37 @@ func (b *BlossomSub) DiscoverPeers(ctx context.Context) error {
 
 func (b *BlossomSub) GetPeerScore(peerId []byte) int64 {
 	b.peerScoreMx.Lock()
-	score := b.peerScore[string(peerId)]
+	peerScore, ok := b.peerScore[string(peerId)]
+	if !ok {
+		b.peerScoreMx.Unlock()
+		return 0
+	}
+	score := peerScore.score
 	b.peerScoreMx.Unlock()
-	return score
+	return int64(score)
 }
 
 func (b *BlossomSub) SetPeerScore(peerId []byte, score int64) {
 	b.peerScoreMx.Lock()
-	b.peerScore[string(peerId)] = score
+	b.peerScore[string(peerId)] = &appScore{
+		score:  float64(score),
+		expire: time.Now().Add(1 * time.Hour),
+	}
 	b.peerScoreMx.Unlock()
 }
 
 func (b *BlossomSub) AddPeerScore(peerId []byte, scoreDelta int64) {
 	b.peerScoreMx.Lock()
 	if _, ok := b.peerScore[string(peerId)]; !ok {
-		b.peerScore[string(peerId)] = scoreDelta
+		b.peerScore[string(peerId)] = &appScore{
+			score:  float64(scoreDelta),
+			expire: time.Now().Add(1 * time.Hour),
+		}
 	} else {
-		b.peerScore[string(peerId)] = b.peerScore[string(peerId)] + scoreDelta
+		b.peerScore[string(peerId)] = &appScore{
+			score:  b.peerScore[string(peerId)].score + float64(scoreDelta),
+			expire: time.Now().Add(1 * time.Hour),
+		}
 	}
 	b.peerScoreMx.Unlock()
 }
@@ -979,6 +1036,9 @@ func withDefaults(p2pConfig *config.P2PConfig) *config.P2PConfig {
 	if p2pConfig.DLazy == 0 {
 		p2pConfig.DLazy = blossomsub.BlossomSubDlazy
 	}
+	if p2pConfig.GossipFactor == 0 {
+		p2pConfig.GossipFactor = blossomsub.BlossomSubGossipFactor
+	}
 	if p2pConfig.GossipRetransmission == 0 {
 		p2pConfig.GossipRetransmission = blossomsub.BlossomSubGossipRetransmission
 	}
@@ -1091,6 +1151,7 @@ func toBlossomSubParams(p2pConfig *config.P2PConfig) blossomsub.BlossomSubParams
 		HistoryLength:             p2pConfig.HistoryLength,
 		HistoryGossip:             p2pConfig.HistoryGossip,
 		Dlazy:                     p2pConfig.DLazy,
+		GossipFactor:              p2pConfig.GossipFactor,
 		GossipRetransmission:      p2pConfig.GossipRetransmission,
 		HeartbeatInitialDelay:     p2pConfig.HeartbeatInitialDelay,
 		HeartbeatInterval:         p2pConfig.HeartbeatInterval,

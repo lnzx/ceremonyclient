@@ -6,7 +6,14 @@ import (
 )
 
 func GetMinimumVersionCutoff() time.Time {
-	return time.Date(2024, time.November, 2, 0, 0, 0, 0, time.UTC)
+	return time.Date(2024, time.November, 24, 0, 0, 0, 0, time.UTC)
+}
+
+// Gets the minimum patch version – This should only be set in a release series
+// if there is something in the patch update that is needed to cut off unupgraded
+// peers. Be sure to update this to 0x00 for any new minor release
+func GetMinimumPatchVersion() byte {
+	return 0x02
 }
 
 func GetMinimumVersion() []byte {
@@ -36,9 +43,9 @@ func FormatVersion(version []byte) string {
 }
 
 func GetPatchNumber() byte {
-	return 0x01
+	return 0x02
 }
 
 func GetRCNumber() byte {
-	return 0x01
+	return 0x02
 }

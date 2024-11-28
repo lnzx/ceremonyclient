@@ -29,7 +29,7 @@ func (a *TokenApplication) handleMint(
 	frame *protobufs.ClockFrame,
 	parallelismMap map[int]uint64,
 ) ([]*protobufs.TokenOutput, error) {
-	if t == nil || t.Proofs == nil || t.Signature == nil {
+	if err := t.Validate(); err != nil {
 		return nil, errors.Wrap(ErrInvalidStateTransition, "handle mint")
 	}
 
@@ -37,9 +37,7 @@ func (a *TokenApplication) handleMint(
 	for _, p := range t.Proofs {
 		payload = append(payload, p...)
 	}
-	if err := t.Signature.Verify(payload); err != nil {
-		return nil, errors.Wrap(ErrInvalidStateTransition, "handle mint")
-	}
+
 	pk, err := pcrypto.UnmarshalEd448PublicKey(
 		t.Signature.PublicKey.KeyValue,
 	)

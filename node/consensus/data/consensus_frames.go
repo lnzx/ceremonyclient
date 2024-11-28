@@ -21,12 +21,13 @@ import (
 
 const defaultSyncTimeout = 4 * time.Second
 
-func (e *DataClockConsensusEngine) collect(
-	enqueuedFrame *protobufs.ClockFrame,
-) (*protobufs.ClockFrame, error) {
+func (e *DataClockConsensusEngine) syncWithMesh() error {
 	e.logger.Info("collecting vdf proofs")
 
-	latest := enqueuedFrame
+	latest, err := e.dataTimeReel.Head()
+	if err != nil {
+		return errors.Wrap(err, "sync")
+	}
 	for {
 		candidates := e.GetAheadPeers(max(latest.FrameNumber, e.latestFrameReceived))
 		if len(candidates) == 0 {
@@ -36,11 +37,16 @@ func (e *DataClockConsensusEngine) collect(
 			if candidate.MaxFrame <= max(latest.FrameNumber, e.latestFrameReceived) {
 				continue
 			}
-			var err error
-			latest, err = e.sync(latest, candidate.MaxFrame, candidate.PeerID)
+			head, err := e.dataTimeReel.Head()
+			if err != nil {
+				return errors.Wrap(err, "sync")
+			}
+			if latest.FrameNumber < head.FrameNumber {
+				latest = head
+			}
+			latest, err = e.syncWithPeer(latest, candidate.MaxFrame, candidate.PeerID)
 			if err != nil {
 				e.logger.Debug("error syncing frame", zap.Error(err))
-				continue
 			}
 		}
 	}
@@ -51,7 +57,7 @@ func (e *DataClockConsensusEngine) collect(
 		zap.Duration("frame_age", frametime.Since(latest)),
 	)
 
-	return latest, nil
+	return nil
 }
 
 func (e *DataClockConsensusEngine) prove(
@@ -268,7 +274,7 @@ func (e *DataClockConsensusEngine) GetAheadPeers(frameNumber uint64) []internal.
 	return internal.WeightedSampleWithoutReplacement(candidates, len(candidates))
 }
 
-func (e *DataClockConsensusEngine) sync(
+func (e *DataClockConsensusEngine) syncWithPeer(
 	currentLatest *protobufs.ClockFrame,
 	maxFrame uint64,
 	peerId []byte,

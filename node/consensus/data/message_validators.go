@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/binary"
+	"fmt"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -51,6 +52,9 @@ func (e *DataClockConsensusEngine) validateTxMessage(peerID peer.ID, message *pb
 		if err := proto.Unmarshal(a.Value, tx); err != nil {
 			return p2p.ValidationResultReject
 		}
+		if err := tx.Validate(); err != nil {
+			return p2p.ValidationResultReject
+		}
 		if mint := tx.GetMint(); mint != nil {
 			if len(mint.Proofs) < 3 {
 				return p2p.ValidationResultReject
@@ -61,18 +65,38 @@ func (e *DataClockConsensusEngine) validateTxMessage(peerID peer.ID, message *pb
 			if len(mint.Proofs[2]) != 8 {
 				return p2p.ValidationResultReject
 			}
+
+			// cheap hack for handling protobuf trickery: because protobufs can be
+			// serialized in infinite ways, message ids can be regenerated simply by
+			// modifying the data without affecting the underlying signed message.
+			// if this is encountered, go scorched earth on the sender – a thank you
+			// message for destabilizing the network.
+			frameNumber := binary.BigEndian.Uint64(mint.Proofs[2])
+			id := fmt.Sprintf(
+				"mint-sign-%d-%x",
+				frameNumber,
+				mint.Signature.PublicKey.KeyValue,
+			)
+			e.validationFilterMx.Lock()
+			_, ok := e.validationFilter[id]
+			e.validationFilter[id] = struct{}{}
+			e.validationFilterMx.Unlock()
+			if ok {
+				e.pubSub.AddPeerScore(message.From, -1000000)
+				return p2p.ValidationResultIgnore
+			}
+
 			head, err := e.dataTimeReel.Head()
 			if err != nil {
 				panic(err)
 			}
-			if frameNumber := binary.BigEndian.Uint64(mint.Proofs[2]); frameNumber+2 < head.FrameNumber {
+			if frameNumber+2 < head.FrameNumber {
 				return p2p.ValidationResultIgnore
 			}
 		}
 		if tx.Timestamp == 0 {
 			// NOTE: The timestamp was added in later versions of the protocol,
 			// and as such it is possible to receive requests without it.
-			// We avoid logging due to this reason.
 			return p2p.ValidationResultAccept
 		}
 		if ts := time.UnixMilli(tx.Timestamp); time.Since(ts) > 10*time.Minute {

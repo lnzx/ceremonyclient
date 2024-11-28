@@ -3,7 +3,8 @@ package data
 import (
 	"context"
 	"crypto"
-	"encoding/binary"
+	stderrors "errors"
+
 	"fmt"
 	"math/rand"
 	"sync"
@@ -55,6 +56,7 @@ type peerInfo struct {
 	timestamp     int64
 	lastSeen      int64
 	version       []byte
+	patchVersion  byte
 	totalDistance []byte
 }
 
@@ -65,6 +67,7 @@ type DataClockConsensusEngine struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	lastProven                  uint64
 	difficulty                  uint32
@@ -118,6 +121,8 @@ type DataClockConsensusEngine struct {
 	stagedTransactions             *protobufs.TokenRequests
 	stagedTransactionsSet          map[string]struct{}
 	stagedTransactionsMx           sync.Mutex
+	validationFilter               map[string]struct{}
+	validationFilterMx             sync.Mutex
 	peerMapMx                      sync.RWMutex
 	peerAnnounceMapMx              sync.Mutex
 	lastKeyBundleAnnouncementFrame uint64
@@ -132,7 +137,7 @@ type DataClockConsensusEngine struct {
 	previousFrameProven            *protobufs.ClockFrame
 	previousTree                   *mt.MerkleTree
 	clientReconnectTest            int
-	requestSyncCh                  chan *protobufs.ClockFrame
+	requestSyncCh                  chan struct{}
 }
 
 var _ consensus.DataConsensusEngine = (*DataClockConsensusEngine)(nil)
@@ -266,7 +271,8 @@ func NewDataClockConsensusEngine(
 			rateLimit,
 			time.Minute,
 		),
-		requestSyncCh: make(chan *protobufs.ClockFrame, 1),
+		requestSyncCh:    make(chan struct{}, 1),
+		validationFilter: map[string]struct{}{},
 	}
 
 	logger.Info("constructing consensus engine")
@@ -311,6 +317,7 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 		panic(err)
 	}
 
+	e.wg.Add(3)
 	go e.runFrameMessageHandler()
 	go e.runTxMessageHandler()
 	go e.runInfoMessageHandler()
@@ -359,7 +366,9 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 	e.state = consensus.EngineStateCollecting
 	e.stateMx.Unlock()
 
+	e.wg.Add(1)
 	go func() {
+		defer e.wg.Done()
 		const baseDuration = 2 * time.Minute
 		const maxBackoff = 3
 		var currentBackoff = 0
@@ -395,7 +404,9 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 		}
 	}()
 
+	e.wg.Add(1)
 	go func() {
+		defer e.wg.Done()
 		thresholdBeforeConfirming := 4
 		frame, err := e.dataTimeReel.Head()
 		if err != nil {
@@ -422,11 +433,12 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 			timestamp := time.Now().UnixMilli()
 			list := &protobufs.DataPeerListAnnounce{
 				Peer: &protobufs.DataPeer{
-					PeerId:    nil,
-					Multiaddr: "",
-					MaxFrame:  frame.FrameNumber,
-					Version:   config.GetVersion(),
-					Timestamp: timestamp,
+					PeerId:       nil,
+					Multiaddr:    "",
+					MaxFrame:     frame.FrameNumber,
+					Version:      config.GetVersion(),
+					PatchVersion: []byte{config.GetPatchNumber()},
+					Timestamp:    timestamp,
 					TotalDistance: e.dataTimeReel.GetTotalDistance().FillBytes(
 						make([]byte, 256),
 					),
@@ -442,11 +454,12 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 
 			e.peerMapMx.Lock()
 			e.peerMap[string(e.pubSub.GetPeerID())] = &peerInfo{
-				peerId:    e.pubSub.GetPeerID(),
-				multiaddr: "",
-				maxFrame:  frame.FrameNumber,
-				version:   config.GetVersion(),
-				timestamp: timestamp,
+				peerId:       e.pubSub.GetPeerID(),
+				multiaddr:    "",
+				maxFrame:     frame.FrameNumber,
+				version:      config.GetVersion(),
+				patchVersion: config.GetPatchNumber(),
+				timestamp:    timestamp,
 				totalDistance: e.dataTimeReel.GetTotalDistance().FillBytes(
 					make([]byte, 256),
 				),
@@ -500,11 +513,14 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 		}
 	}()
 
+	e.wg.Add(3)
 	go e.runLoop()
 	go e.runSync()
 	go e.runFramePruning()
 
+	e.wg.Add(1)
 	go func() {
+		defer e.wg.Done()
 		select {
 		case <-e.ctx.Done():
 			return
@@ -524,7 +540,9 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 
 	go e.runPreMidnightProofWorker()
 
+	e.wg.Add(1)
 	go func() {
+		defer e.wg.Done()
 		if len(e.config.Engine.DataWorkerMultiaddrs) != 0 {
 			e.clients, err = e.createParallelDataClientsFromList()
 			if err != nil {
@@ -582,6 +600,7 @@ func (e *DataClockConsensusEngine) PerformTimeProof(
 		i := i
 		client := client
 		go func() {
+			defer wg.Done()
 			resp, err :=
 				client.client.CalculateChallengeProof(
 					e.ctx,
@@ -595,7 +614,6 @@ func (e *DataClockConsensusEngine) PerformTimeProof(
 				)
 			if err != nil {
 				if status.Code(err) == codes.NotFound {
-					wg.Done()
 					return
 				}
 			}
@@ -605,8 +623,6 @@ func (e *DataClockConsensusEngine) PerformTimeProof(
 			} else {
 				e.clients[client.index] = nil
 			}
-
-			wg.Done()
 		}()
 	}
 	wg.Wait()
@@ -623,40 +639,32 @@ func (e *DataClockConsensusEngine) PerformTimeProof(
 func (e *DataClockConsensusEngine) Stop(force bool) <-chan error {
 	e.logger.Info("stopping ceremony consensus engine")
 	e.cancel()
+	e.wg.Wait()
 	e.stateMx.Lock()
 	e.state = consensus.EngineStateStopping
 	e.stateMx.Unlock()
 	errChan := make(chan error)
 
-	msg := []byte("pause")
-	msg = binary.BigEndian.AppendUint64(msg, e.GetFrame().FrameNumber)
-	msg = append(msg, e.filter...)
-	sig, err := e.pubSub.SignMessage(msg)
-	if err != nil {
+	pause := &protobufs.AnnounceProverPause{
+		Filter:      e.filter,
+		FrameNumber: e.GetFrame().FrameNumber,
+	}
+	if err := pause.SignED448(e.pubSub.GetPublicKey(), e.pubSub.SignMessage); err != nil {
+		panic(err)
+	}
+	if err := pause.Validate(); err != nil {
 		panic(err)
 	}
 
-	e.publishMessage(e.txFilter, &protobufs.TokenRequest{
-		Request: &protobufs.TokenRequest_Pause{
-			Pause: &protobufs.AnnounceProverPause{
-				Filter:      e.filter,
-				FrameNumber: e.GetFrame().FrameNumber,
-				PublicKeySignatureEd448: &protobufs.Ed448Signature{
-					PublicKey: &protobufs.Ed448PublicKey{
-						KeyValue: e.pubSub.GetPublicKey(),
-					},
-					Signature: sig,
-				},
-			},
-		},
-		Timestamp: time.Now().UnixMilli(),
-	})
+	e.publishMessage(e.txFilter, pause.TokenRequest())
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(e.executionEngines))
+	executionErrors := make(chan error, len(e.executionEngines))
 	for name := range e.executionEngines {
 		name := name
 		go func(name string) {
+			defer wg.Done()
 			frame, err := e.dataTimeReel.Head()
 			if err != nil {
 				panic(err)
@@ -664,9 +672,8 @@ func (e *DataClockConsensusEngine) Stop(force bool) <-chan error {
 
 			err = <-e.UnregisterExecutor(name, frame.FrameNumber, force)
 			if err != nil {
-				errChan <- err
+				executionErrors <- err
 			}
-			wg.Done()
 		}(name)
 	}
 
@@ -679,6 +686,7 @@ func (e *DataClockConsensusEngine) Stop(force bool) <-chan error {
 
 	e.logger.Info("waiting for execution engines to stop")
 	wg.Wait()
+	close(executionErrors)
 	e.logger.Info("execution engines stopped")
 
 	e.dataTimeReel.Stop()
@@ -689,7 +697,12 @@ func (e *DataClockConsensusEngine) Stop(force bool) <-chan error {
 	e.engineMx.Lock()
 	defer e.engineMx.Unlock()
 	go func() {
-		errChan <- nil
+		var errs []error
+		for err := range executionErrors {
+			errs = append(errs, err)
+		}
+		err := stderrors.Join(errs...)
+		errChan <- err
 	}()
 	return errChan
 }

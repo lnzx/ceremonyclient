@@ -65,22 +65,24 @@ func (e *DataClockConsensusEngine) publishProof(
 
 	e.peerMapMx.Lock()
 	e.peerMap[string(e.pubSub.GetPeerID())] = &peerInfo{
-		peerId:    e.pubSub.GetPeerID(),
-		multiaddr: "",
-		maxFrame:  frame.FrameNumber,
-		version:   config.GetVersion(),
-		timestamp: timestamp,
+		peerId:       e.pubSub.GetPeerID(),
+		multiaddr:    "",
+		maxFrame:     frame.FrameNumber,
+		version:      config.GetVersion(),
+		patchVersion: config.GetPatchNumber(),
+		timestamp:    timestamp,
 		totalDistance: e.dataTimeReel.GetTotalDistance().FillBytes(
 			make([]byte, 256),
 		),
 	}
 	list := &protobufs.DataPeerListAnnounce{
 		Peer: &protobufs.DataPeer{
-			PeerId:    nil,
-			Multiaddr: "",
-			MaxFrame:  frame.FrameNumber,
-			Version:   config.GetVersion(),
-			Timestamp: timestamp,
+			PeerId:       nil,
+			Multiaddr:    "",
+			MaxFrame:     frame.FrameNumber,
+			Version:      config.GetVersion(),
+			PatchVersion: []byte{config.GetPatchNumber()},
+			Timestamp:    timestamp,
 			TotalDistance: e.dataTimeReel.GetTotalDistance().FillBytes(
 				make([]byte, 256),
 			),
@@ -100,19 +102,19 @@ func (e *DataClockConsensusEngine) insertTxMessage(
 	filter []byte,
 	message proto.Message,
 ) error {
-	any := &anypb.Any{}
-	if err := any.MarshalFrom(message); err != nil {
+	a := &anypb.Any{}
+	if err := a.MarshalFrom(message); err != nil {
 		return errors.Wrap(err, "publish message")
 	}
 
-	any.TypeUrl = strings.Replace(
-		any.TypeUrl,
+	a.TypeUrl = strings.Replace(
+		a.TypeUrl,
 		"type.googleapis.com",
 		"types.quilibrium.com",
 		1,
 	)
 
-	payload, err := proto.Marshal(any)
+	payload, err := proto.Marshal(a)
 	if err != nil {
 		return errors.Wrap(err, "publish message")
 	}
@@ -154,19 +156,19 @@ func (e *DataClockConsensusEngine) publishMessage(
 	filter []byte,
 	message proto.Message,
 ) error {
-	any := &anypb.Any{}
-	if err := any.MarshalFrom(message); err != nil {
+	a := &anypb.Any{}
+	if err := a.MarshalFrom(message); err != nil {
 		return errors.Wrap(err, "publish message")
 	}
 
-	any.TypeUrl = strings.Replace(
-		any.TypeUrl,
+	a.TypeUrl = strings.Replace(
+		a.TypeUrl,
 		"type.googleapis.com",
 		"types.quilibrium.com",
 		1,
 	)
 
-	payload, err := proto.Marshal(any)
+	payload, err := proto.Marshal(a)
 	if err != nil {
 		return errors.Wrap(err, "publish message")
 	}

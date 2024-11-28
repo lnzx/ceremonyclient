@@ -26,6 +26,7 @@ message DataPeer {
   reserved 7;
   reserved "public_key";
   bytes total_distance = 8;
+  bytes patch_version = 9;
 }
 
 message DataCompressedSync {

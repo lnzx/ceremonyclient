@@ -40,6 +40,7 @@ var (
 	BlossomSubHistoryLength                    = 5
 	BlossomSubHistoryGossip                    = 3
 	BlossomSubDlazy                            = 6
+	BlossomSubGossipFactor                     = 0.25
 	BlossomSubGossipRetransmission             = 3
 	BlossomSubBitmaskWidth                     = 256
 	BlossomSubHeartbeatInitialDelay            = 100 * time.Millisecond
@@ -116,8 +117,14 @@ type BlossomSubParams struct {
 
 	// Dlazy affects how many peers we will emit gossip to at each heartbeat.
 	// We will send gossip to at least Dlazy peers outside our mesh. The actual
-	// number may be less, depending on how many peers we're connected to.
+	// number may be more, depending on GossipFactor and how many peers we're
+	// connected to.
 	Dlazy int
+
+	// GossipFactor affects how many peers we will emit gossip to at each heartbeat.
+	// We will send gossip to GossipFactor * (total number of non-mesh peers), or
+	// Dlazy, whichever is greater.
+	GossipFactor float64
 
 	// GossipRetransmission controls how many times we will allow a peer to request
 	// the same message id through IWANT gossip before we start ignoring them. This is designed
@@ -313,6 +320,7 @@ func DefaultBlossomSubParams() BlossomSubParams {
 		HistoryLength:             BlossomSubHistoryLength,
 		HistoryGossip:             BlossomSubHistoryGossip,
 		Dlazy:                     BlossomSubDlazy,
+		GossipFactor:              BlossomSubGossipFactor,
 		GossipRetransmission:      BlossomSubGossipRetransmission,
 		HeartbeatInitialDelay:     BlossomSubHeartbeatInitialDelay,
 		HeartbeatInterval:         BlossomSubHeartbeatInterval,
@@ -693,62 +701,31 @@ func (bs *BlossomSubRouter) RemovePeer(p peer.ID) {
 }
 
 func (bs *BlossomSubRouter) EnoughPeers(bitmask []byte, suggested int) bool {
-	sliced := SliceBitmask(bitmask)
-	// bloom:
-	if len(sliced) != 1 {
-		// check all peers in the bitmask
-		peers := bs.p.getPeersInBitmask(bitmask)
-		if len(peers) == 0 {
-			return false
-		}
-
-		fsPeers, bsPeers := 0, 0
-
-		for _, p := range peers {
-			if !bs.feature(BlossomSubFeatureMesh, bs.peers[p]) {
-				fsPeers++
-			}
-		}
-
-		// BlossomSub peers
-		bsPeers = len(peers)
-
-		if suggested == 0 {
-			suggested = bs.params.Dlo
-		}
-
-		if fsPeers+bsPeers >= suggested || bsPeers >= bs.params.Dhi {
-			return true
-		}
-
-		return false
-	} else { // classic gossip
-		tmap, ok := bs.p.bitmasks[string(bitmask)]
-		if !ok {
-			return false
-		}
-
-		fsPeers, bsPeers := 0, 0
-		// floodsub peers
-		for p := range tmap {
-			if !bs.feature(BlossomSubFeatureMesh, bs.peers[p]) {
-				fsPeers++
-			}
-		}
-
-		// BlossomSub peers
-		bsPeers = len(bs.mesh[string(bitmask)])
-
-		if suggested == 0 {
-			suggested = bs.params.Dlo
-		}
-
-		if fsPeers+bsPeers >= suggested || bsPeers >= bs.params.Dhi {
-			return true
-		}
-
+	tmap, ok := bs.p.bitmasks[string(bitmask)]
+	if !ok {
 		return false
 	}
+
+	fsPeers, bsPeers := 0, 0
+	// floodsub peers
+	for p := range tmap {
+		if !bs.feature(BlossomSubFeatureMesh, bs.peers[p]) {
+			fsPeers++
+		}
+	}
+
+	// BlossomSub peers
+	bsPeers = len(bs.mesh[string(bitmask)])
+
+	if suggested == 0 {
+		suggested = bs.params.Dlo
+	}
+
+	if fsPeers+bsPeers >= suggested || bsPeers >= bs.params.Dhi {
+		return true
+	}
+
+	return false
 }
 
 func (bs *BlossomSubRouter) PeerScore(p peer.ID) float64 {
@@ -943,6 +920,13 @@ func (bs *BlossomSubRouter) handleIWant(p peer.ID, ctl *pb.ControlMessage) []*pb
 
 	msgs := make([]*pb.Message, 0, len(ihave))
 	for _, msg := range ihave {
+		if peer.ID(msg.GetFrom()) == p {
+			continue
+		}
+		mid := bs.p.idGen.RawID(msg)
+		if _, ok := bs.unwanted[p][string(mid)]; ok {
+			continue
+		}
 		msgs = append(msgs, msg)
 	}
 
@@ -1052,31 +1036,15 @@ func (bs *BlossomSubRouter) handlePrune(p peer.ID, ctl *pb.ControlMessage) {
 
 	for _, prune := range ctl.GetPrune() {
 		bitmask := prune.GetBitmask()
-		sliced := SliceBitmask(bitmask)
-		// bloom publish:
-		if len(sliced) != 1 {
-			// any peers in all slices of the bitmask?
-			peers := bs.p.getPeersInBitmask(bitmask)
-			if len(peers) == 0 {
-				return
-			}
+		peers, ok := bs.mesh[string(bitmask)]
+		if !ok {
+			continue
+		}
 
-			for _, p := range peers {
-				log.Debugf("PRUNE: Remove mesh link to %s in %s", p, bitmask)
-				bs.tracer.Prune(p, bitmask)
-				delete(bs.p.bitmasks[string(bitmask)], p)
-			}
-		} else { // classic gossip mesh
-			peers, ok := bs.mesh[string(bitmask)]
-			if !ok {
-				continue
-			}
-
-			if _, inMesh := peers[p]; inMesh {
-				log.Debugf("PRUNE: Remove mesh link to %s in %s", p, bitmask)
-				bs.tracer.Prune(p, bitmask)
-				delete(peers, p)
-			}
+		if _, inMesh := peers[p]; inMesh {
+			log.Debugf("PRUNE: Remove mesh link to %s in %s", p, bitmask)
+			bs.tracer.Prune(p, bitmask)
+			delete(peers, p)
 		}
 
 		// is there a backoff specified by the peer? if so obey it.
@@ -1227,22 +1195,13 @@ func (bs *BlossomSubRouter) Publish(msg *Message) {
 
 	from := msg.ReceivedFrom
 	bitmask := msg.GetBitmask()
+	originalSender := peer.ID(msg.GetFrom())
+	mid := string(bs.p.idGen.ID(msg))
 
-	tosend := make(map[peer.ID]struct{})
+	var toSendAll []map[peer.ID]struct{}
+	for _, bitmask := range SliceBitmask(bitmask) {
+		tosend := make(map[peer.ID]struct{})
 
-	sliced := SliceBitmask(bitmask)
-	// bloom publish:
-	if len(sliced) != 1 {
-		// any peers in all slices of the bitmask?
-		peers := bs.p.getPeersInBitmask(bitmask)
-		if len(peers) == 0 {
-			return
-		}
-
-		for _, p := range peers {
-			tosend[p] = struct{}{}
-		}
-	} else { // classic gossip mesh
 		// any peers in the bitmask?
 		tmap, ok := bs.p.bitmasks[string(bitmask)]
 		if !ok {
@@ -1296,21 +1255,27 @@ func (bs *BlossomSubRouter) Publish(msg *Message) {
 				tosend[p] = struct{}{}
 			}
 		}
+
+		delete(tosend, from)
+		delete(tosend, originalSender)
+		for p := range tosend {
+			if _, ok := bs.unwanted[p][mid]; ok {
+				delete(tosend, p)
+			}
+		}
+
+		if len(tosend) > 0 {
+			toSendAll = append(toSendAll, tosend)
+		}
 	}
 
+	if len(toSendAll) == 0 {
+		return
+	}
+	toSend := toSendAll[rand.Intn(len(toSendAll))]
+
 	out := rpcWithMessages(msg.Message)
-	for pid := range tosend {
-		if pid == from || pid == peer.ID(msg.GetFrom()) {
-			continue
-		}
-
-		mid := bs.p.idGen.ID(msg)
-		// Check if it has already received an IDONTWANT for the message.
-		// If so, don't send it to the peer
-		if _, ok := bs.unwanted[pid][string(mid)]; ok {
-			continue
-		}
-
+	for pid := range toSend {
 		bs.sendRPC(pid, out, false)
 	}
 }
@@ -1374,56 +1339,24 @@ func (bs *BlossomSubRouter) Join(bitmask []byte) {
 }
 
 func (bs *BlossomSubRouter) Leave(bitmask []byte) {
-	sliced := SliceBitmask(bitmask)
-	// bloom publish:
-	if len(sliced) != 1 {
-		// any peers in all slices of the bitmask?
-		peers := bs.p.getPeersInBitmask(bitmask)
-		if len(peers) == 0 {
-			return
-		}
+	gmap, ok := bs.mesh[string(bitmask)]
+	if !ok {
+		return
+	}
 
-		for _, s := range sliced {
-			_, ok := bs.mesh[string(s)]
-			if !ok {
-				continue
-			}
+	log.Debugf("LEAVE %s", bitmask)
+	bs.tracer.Leave(bitmask)
 
-			log.Debugf("LEAVE %s", bitmask)
-			bs.tracer.Leave(bitmask)
+	delete(bs.mesh, string(bitmask))
 
-			delete(bs.mesh, string(bitmask))
-		}
-
-		for _, p := range peers {
-			log.Debugf("LEAVE: Remove mesh link to %s in %s", p, bitmask)
-			bs.tracer.Prune(p, bitmask)
-			bs.sendPrune(p, bitmask, true)
-			// Add a backoff to this peer to prevent us from eagerly
-			// re-grafting this peer into our mesh if we rejoin this
-			// bitmask before the backoff period ends.
-			bs.addBackoff(p, bitmask, true)
-		}
-	} else { // classic gossip mesh
-		gmap, ok := bs.mesh[string(bitmask)]
-		if !ok {
-			return
-		}
-
-		log.Debugf("LEAVE %s", bitmask)
-		bs.tracer.Leave(bitmask)
-
-		delete(bs.mesh, string(bitmask))
-
-		for p := range gmap {
-			log.Debugf("LEAVE: Remove mesh link to %s in %s", p, bitmask)
-			bs.tracer.Prune(p, bitmask)
-			bs.sendPrune(p, bitmask, true)
-			// Add a backoff to this peer to prevent us from eagerly
-			// re-grafting this peer into our mesh if we rejoin this
-			// bitmask before the backoff period ends.
-			bs.addBackoff(p, bitmask, true)
-		}
+	for p := range gmap {
+		log.Debugf("LEAVE: Remove mesh link to %s in %s", p, bitmask)
+		bs.tracer.Prune(p, bitmask)
+		bs.sendPrune(p, bitmask, true)
+		// Add a backoff to this peer to prevent us from eagerly
+		// re-grafting this peer into our mesh if we rejoin this
+		// bitmask before the backoff period ends.
+		bs.addBackoff(p, bitmask, true)
 	}
 }
 
@@ -1469,18 +1402,18 @@ func (bs *BlossomSubRouter) sendRPC(p peer.ID, out *RPC, fast bool) {
 	}
 
 	// If we're below the max message size, go ahead and send
-	if out.Size() < bs.p.maxMessageSize {
+	if out.Size() < bs.p.softMaxMessageSize {
 		bs.doSendRPC(out, p, mch, fast)
 		return
 	}
 
 	outCopy := copyRPC(out)
 	// Potentially split the RPC into multiple RPCs that are below the max message size
-	outRPCs := appendOrMergeRPC(nil, bs.p.maxMessageSize, outCopy)
+	outRPCs := appendOrMergeRPC(nil, bs.p.softMaxMessageSize, outCopy)
 	for _, rpc := range outRPCs {
-		if rpc.Size() > bs.p.maxMessageSize {
+		if rpc.Size() > bs.p.hardMaxMessageSize {
 			// This should only happen if a single message/control is above the maxMessageSize.
-			bs.doDropRPC(out, p, fmt.Sprintf("Dropping oversized RPC. Size: %d, limit: %d. (Over by %d bytes)", rpc.Size(), bs.p.maxMessageSize, rpc.Size()-bs.p.maxMessageSize))
+			bs.doDropRPC(out, p, fmt.Sprintf("Dropping oversized RPC. Size: %d, limit: %d. (Over by %d bytes)", rpc.Size(), bs.p.hardMaxMessageSize, rpc.Size()-bs.p.hardMaxMessageSize))
 			continue
 		}
 		bs.doSendRPC(rpc, p, mch, fast)
@@ -2070,6 +2003,8 @@ func (bs *BlossomSubRouter) emitGossip(bitmask []byte, exclude map[peer.ID]struc
 	}
 
 	target := bs.params.Dlazy
+	factor := int(bs.params.GossipFactor * float64(len(peers)))
+	target = max(target, factor)
 
 	if target > len(peers) {
 		target = len(peers)

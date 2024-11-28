@@ -43,6 +43,7 @@ func (
 }
 
 func (e *DataClockConsensusEngine) runFramePruning() {
+	defer e.wg.Done()
 	// A full prover should _never_ do this
 	if e.GetFrameProverTries()[0].Contains(e.provingKeyAddress) ||
 		e.config.Engine.MaxFrames == -1 || e.config.Engine.FullProver {
@@ -85,6 +86,7 @@ func (e *DataClockConsensusEngine) runFramePruning() {
 }
 
 func (e *DataClockConsensusEngine) runSync() {
+	defer e.wg.Done()
 	// small optimization, beacon should never collect for now:
 	if e.GetFrameProverTries()[0].Contains(e.provingKeyAddress) {
 		return
@@ -94,25 +96,19 @@ func (e *DataClockConsensusEngine) runSync() {
 		select {
 		case <-e.ctx.Done():
 			return
-		case enqueuedFrame := <-e.requestSyncCh:
-			if enqueuedFrame == nil {
-				var err error
-				enqueuedFrame, err = e.dataTimeReel.Head()
-				if err != nil {
-					panic(err)
-				}
-			}
+		case <-e.requestSyncCh:
 			if err := e.pubSub.Bootstrap(e.ctx); err != nil {
 				e.logger.Error("could not bootstrap", zap.Error(err))
 			}
-			if _, err := e.collect(enqueuedFrame); err != nil {
-				e.logger.Error("could not collect", zap.Error(err))
+			if err := e.syncWithMesh(); err != nil {
+				e.logger.Error("could not sync", zap.Error(err))
 			}
 		}
 	}
 }
 
 func (e *DataClockConsensusEngine) runLoop() {
+	defer e.wg.Done()
 	dataFrameCh := e.dataTimeReel.NewFrameCh()
 	runOnce := true
 	for {
@@ -149,6 +145,9 @@ func (e *DataClockConsensusEngine) runLoop() {
 			case <-e.ctx.Done():
 				return
 			case dataFrame := <-dataFrameCh:
+				e.validationFilterMx.Lock()
+				e.validationFilter = make(map[string]struct{}, len(e.validationFilter))
+				e.validationFilterMx.Unlock()
 				if e.GetFrameProverTries()[0].Contains(e.provingKeyAddress) {
 					if err = e.publishProof(dataFrame); err != nil {
 						e.logger.Error("could not publish", zap.Error(err))
@@ -177,7 +176,7 @@ func (e *DataClockConsensusEngine) processFrame(
 	var err error
 	if !e.GetFrameProverTries()[0].Contains(e.provingKeyBytes) {
 		select {
-		case e.requestSyncCh <- dataFrame:
+		case e.requestSyncCh <- struct{}{}:
 		default:
 		}
 	}
@@ -298,7 +297,7 @@ func (e *DataClockConsensusEngine) processFrame(
 					return latestFrame
 				}
 				modulo := len(outputs)
-				proofTree, payload, output, err := tries.PackOutputIntoPayloadAndProof(
+				proofTree, output, err := tries.PackOutputIntoPayloadAndProof(
 					outputs,
 					modulo,
 					latestFrame,
@@ -314,11 +313,16 @@ func (e *DataClockConsensusEngine) processFrame(
 				e.previousFrameProven = latestFrame
 				e.previousTree = proofTree
 
-				sig, err := e.pubSub.SignMessage(
-					payload,
-				)
-				if err != nil {
-					panic(err)
+				mint := &protobufs.MintCoinRequest{
+					Proofs: output,
+				}
+				if err := mint.SignED448(e.pubSub.GetPublicKey(), e.pubSub.SignMessage); err != nil {
+					e.logger.Error("could not sign mint", zap.Error(err))
+					return latestFrame
+				}
+				if err := mint.Validate(); err != nil {
+					e.logger.Error("mint validation failed", zap.Error(err))
+					return latestFrame
 				}
 
 				e.logger.Info(
@@ -329,20 +333,7 @@ func (e *DataClockConsensusEngine) processFrame(
 					zap.Duration("frame_age", frametime.Since(latestFrame)),
 				)
 
-				e.publishMessage(e.txFilter, &protobufs.TokenRequest{
-					Request: &protobufs.TokenRequest_Mint{
-						Mint: &protobufs.MintCoinRequest{
-							Proofs: output,
-							Signature: &protobufs.Ed448Signature{
-								PublicKey: &protobufs.Ed448PublicKey{
-									KeyValue: e.pubSub.GetPublicKey(),
-								},
-								Signature: sig,
-							},
-						},
-					},
-					Timestamp: time.Now().UnixMilli(),
-				})
+				e.publishMessage(e.txFilter, mint.TokenRequest())
 
 				if e.config.Engine.AutoMergeCoins {
 					_, addrs, _, err := e.coinStore.GetCoinsForOwner(
@@ -357,33 +348,29 @@ func (e *DataClockConsensusEngine) processFrame(
 					}
 
 					if len(addrs) > 25 {
-						message := []byte("merge")
 						refs := []*protobufs.CoinRef{}
 						for _, addr := range addrs {
-							message = append(message, addr...)
 							refs = append(refs, &protobufs.CoinRef{
 								Address: addr,
 							})
 						}
 
-						sig, _ := e.pubSub.SignMessage(
-							message,
-						)
+						merge := &protobufs.MergeCoinRequest{
+							Coins: refs,
+						}
+						if err := merge.SignED448(
+							e.pubSub.GetPublicKey(),
+							e.pubSub.SignMessage,
+						); err != nil {
+							e.logger.Error("could not sign merge", zap.Error(err))
+							return latestFrame
+						}
+						if err := merge.Validate(); err != nil {
+							e.logger.Error("merge validation failed", zap.Error(err))
+							return latestFrame
+						}
 
-						e.publishMessage(e.txFilter, &protobufs.TokenRequest{
-							Request: &protobufs.TokenRequest_Merge{
-								Merge: &protobufs.MergeCoinRequest{
-									Coins: refs,
-									Signature: &protobufs.Ed448Signature{
-										PublicKey: &protobufs.Ed448PublicKey{
-											KeyValue: e.pubSub.GetPublicKey(),
-										},
-										Signature: sig,
-									},
-								},
-							},
-							Timestamp: time.Now().UnixMilli(),
-						})
+						e.publishMessage(e.txFilter, merge.TokenRequest())
 					}
 				}
 			}

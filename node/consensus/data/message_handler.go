@@ -2,6 +2,7 @@ package data
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 )
 
 func (e *DataClockConsensusEngine) runFrameMessageHandler() {
+	defer e.wg.Done()
 	for {
 		select {
 		case <-e.ctx.Done():
@@ -32,31 +34,18 @@ func (e *DataClockConsensusEngine) runFrameMessageHandler() {
 				continue
 			}
 
-			any := &anypb.Any{}
-			if err := proto.Unmarshal(msg.Payload, any); err != nil {
+			a := &anypb.Any{}
+			if err := proto.Unmarshal(msg.Payload, a); err != nil {
 				e.logger.Error("error while unmarshaling", zap.Error(err))
 				continue
 			}
 
-			accepted := false
-			switch any.TypeUrl {
-			//expand for future message types
-			case protobufs.ClockFrameType:
-				accepted = true
-			default:
-			}
-
-			if !accepted {
-				e.pubSub.AddPeerScore(message.From, -100000)
-				continue
-			}
-
-			switch any.TypeUrl {
+			switch a.TypeUrl {
 			case protobufs.ClockFrameType:
 				if err := e.handleClockFrameData(
 					message.From,
 					msg.Address,
-					any,
+					a,
 					false,
 				); err != nil {
 					e.logger.Debug("could not handle clock frame data", zap.Error(err))
@@ -67,6 +56,7 @@ func (e *DataClockConsensusEngine) runFrameMessageHandler() {
 }
 
 func (e *DataClockConsensusEngine) runTxMessageHandler() {
+	defer e.wg.Done()
 	for {
 		select {
 		case <-e.ctx.Done():
@@ -80,21 +70,8 @@ func (e *DataClockConsensusEngine) runTxMessageHandler() {
 				continue
 			}
 
-			any := &anypb.Any{}
-			if err := proto.Unmarshal(msg.Payload, any); err != nil {
-				continue
-			}
-
-			accepted := false
-			switch any.TypeUrl {
-			//expand for future message types
-			case protobufs.TokenRequestType:
-				accepted = true
-			default:
-			}
-
-			if !accepted {
-				e.pubSub.AddPeerScore(message.From, -100000)
+			a := &anypb.Any{}
+			if err := proto.Unmarshal(msg.Payload, a); err != nil {
 				continue
 			}
 
@@ -119,8 +96,8 @@ func (e *DataClockConsensusEngine) runTxMessageHandler() {
 						}
 
 						for _, appMessage := range messages {
-							appMsg := &anypb.Any{}
-							err := proto.Unmarshal(appMessage.Payload, appMsg)
+							a := &anypb.Any{}
+							err := proto.Unmarshal(appMessage.Payload, a)
 							if err != nil {
 								e.logger.Error(
 									"could not unmarshal app message",
@@ -130,10 +107,10 @@ func (e *DataClockConsensusEngine) runTxMessageHandler() {
 								continue
 							}
 
-							switch appMsg.TypeUrl {
+							switch a.TypeUrl {
 							case protobufs.TokenRequestType:
 								t := &protobufs.TokenRequest{}
-								err := proto.Unmarshal(appMsg.Value, t)
+								err := proto.Unmarshal(a.Value, t)
 								if err != nil {
 									e.logger.Debug("could not unmarshal token request", zap.Error(err))
 									continue
@@ -155,6 +132,7 @@ func (e *DataClockConsensusEngine) runTxMessageHandler() {
 }
 
 func (e *DataClockConsensusEngine) runInfoMessageHandler() {
+	defer e.wg.Done()
 	for {
 		select {
 		case <-e.ctx.Done():
@@ -168,31 +146,18 @@ func (e *DataClockConsensusEngine) runInfoMessageHandler() {
 				continue
 			}
 
-			any := &anypb.Any{}
-			if err := proto.Unmarshal(msg.Payload, any); err != nil {
+			a := &anypb.Any{}
+			if err := proto.Unmarshal(msg.Payload, a); err != nil {
 				e.logger.Error("error while unmarshaling", zap.Error(err))
 				continue
 			}
 
-			accepted := false
-			switch any.TypeUrl {
-			//expand for future message types
-			case protobufs.DataPeerListAnnounceType:
-				accepted = true
-			default:
-			}
-
-			if !accepted {
-				e.pubSub.AddPeerScore(message.From, -100000)
-				continue
-			}
-
-			switch any.TypeUrl {
+			switch a.TypeUrl {
 			case protobufs.DataPeerListAnnounceType:
 				if err := e.handleDataPeerListAnnounce(
 					message.From,
 					msg.Address,
-					any,
+					a,
 				); err != nil {
 					e.logger.Debug("could not handle data peer list announce", zap.Error(err))
 				}
@@ -305,6 +270,11 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 		return nil
 	}
 
+	patchVersion := byte(0)
+	if len(p.PatchVersion) == 1 {
+		patchVersion = p.PatchVersion[0]
+	}
+
 	if p.Version != nil &&
 		bytes.Compare(p.Version, config.GetMinimumVersion()) < 0 &&
 		p.Timestamp > config.GetMinimumVersionCutoff().UnixMilli() {
@@ -312,7 +282,7 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 			"peer provided outdated version, penalizing app score",
 			zap.String("peer_id", peer.ID(peerID).String()),
 		)
-		e.pubSub.SetPeerScore(peerID, -1000000)
+		e.pubSub.AddPeerScore(peerID, -1000)
 		return nil
 	}
 
@@ -323,7 +293,7 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 	}
 	e.peerMapMx.RUnlock()
 
-	e.pubSub.SetPeerScore(peerID, 10)
+	e.pubSub.AddPeerScore(peerID, 10)
 
 	e.peerMapMx.RLock()
 	existing, ok := e.peerMap[string(peerID)]
@@ -342,6 +312,7 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 		lastSeen:      time.Now().Unix(),
 		timestamp:     p.Timestamp,
 		version:       p.Version,
+		patchVersion:  patchVersion,
 		totalDistance: p.TotalDistance,
 	}
 	e.peerMapMx.Unlock()
@@ -349,7 +320,7 @@ func (e *DataClockConsensusEngine) handleDataPeerListAnnounce(
 	select {
 	case <-e.ctx.Done():
 		return nil
-	case e.requestSyncCh <- nil:
+	case e.requestSyncCh <- struct{}{}:
 	default:
 	}
 
@@ -370,10 +341,12 @@ func TokenRequestIdentifiers(transition *protobufs.TokenRequest) []string {
 		return identifiers
 	case *protobufs.TokenRequest_Mint:
 		if len(t.Mint.Proofs) == 1 {
-			return []string{fmt.Sprintf("mint-%x", sha3.Sum512(t.Mint.Proofs[0]))}
+			return []string{fmt.Sprintf("mint-proof-%x", sha3.Sum512(t.Mint.Proofs[0]))}
+		} else if len(t.Mint.Proofs) >= 3 {
+			frameNumber := binary.BigEndian.Uint64(t.Mint.Proofs[2])
+			return []string{fmt.Sprintf("mint-sign-%d-%x", frameNumber, t.Mint.Signature.PublicKey.KeyValue)}
 		}
-		// Large proofs are currently not deduplicated.
-		return nil
+		return []string{fmt.Sprintf("mint-sign-%x", t.Mint.Signature.PublicKey.KeyValue)}
 	case *protobufs.TokenRequest_Announce:
 		identifiers := make([]string, len(t.Announce.GetPublicKeySignaturesEd448()))
 		for i, sig := range t.Announce.GetPublicKeySignaturesEd448() {
