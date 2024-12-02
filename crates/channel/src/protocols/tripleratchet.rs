@@ -408,13 +408,23 @@ impl TripleRatchetParticipant {
     pub fn initialize(&mut self, init_messages: &HashMap<Vec<u8>, P2PChannelEnvelope>) 
         -> Result<HashMap<Vec<u8>, P2PChannelEnvelope>, TripleRatchetError> {
         for (k, m) in init_messages {
-            let msg = self.peer_channels.get_mut(k).unwrap().ratchet_decrypt(m).unwrap();
-            if msg != b"init" {
+            let channel = self.peer_channels.get_mut(k);
+            if channel.is_none() {
+                return Err(TripleRatchetError::InvalidData("Invalid peer channel".into()))
+            }
+            let msg = channel.unwrap().ratchet_decrypt(m);
+            if msg.is_err() {
+              return Err(TripleRatchetError::CryptoError(msg.err().unwrap().to_string()))
+            }
+            if msg.unwrap() != b"init" {
                 return Err(TripleRatchetError::InvalidData("Invalid init message".into()));
             }
         }
 
-        self.dkg_ratchet.sample_polynomial(&mut OsRng);
+        let maybeerr = self.dkg_ratchet.sample_polynomial(&mut OsRng);
+        if maybeerr.is_err() {
+          return Err(TripleRatchetError::InvalidData(maybeerr.err().unwrap().to_string().into()))
+        }
 
         let result = self.dkg_ratchet.get_poly_frags().unwrap();
 
@@ -435,11 +445,18 @@ impl TripleRatchetParticipant {
 
     pub fn receive_poly_frag(&mut self, peer_id: &[u8], frag: &P2PChannelEnvelope) 
         -> Result<Option<HashMap<Vec<u8>, P2PChannelEnvelope>>, TripleRatchetError> {
-        let b = self.peer_channels.get_mut(peer_id).unwrap().ratchet_decrypt(frag).unwrap();
+        let channel = self.peer_channels.get_mut(peer_id);
+        if channel.is_none() {
+            return Err(TripleRatchetError::InvalidData("Invalid peer channel".into()))
+        }
+        let b = channel.unwrap().ratchet_decrypt(frag);
+        if b.is_err() {
+          return Err(TripleRatchetError::CryptoError(b.err().unwrap().to_string()))
+        }
 
         let result = self.dkg_ratchet.set_poly_frag_for_party(
             *self.peer_id_map.get(peer_id).unwrap(),
-            &b,
+            &b.unwrap(),
         ).unwrap();
 
         if result.is_some() {
@@ -457,11 +474,18 @@ impl TripleRatchetParticipant {
 
     pub fn receive_commitment(&mut self, peer_id: &[u8], zkcommit: &P2PChannelEnvelope) 
         -> Result<Option<HashMap<Vec<u8>, P2PChannelEnvelope>>, TripleRatchetError> {
-        let b = self.peer_channels.get_mut(peer_id).unwrap().ratchet_decrypt(zkcommit).unwrap();
+        let channel = self.peer_channels.get_mut(peer_id);
+        if channel.is_none() {
+            return Err(TripleRatchetError::InvalidData("Invalid peer channel".into()))
+        }
+        let b = channel.unwrap().ratchet_decrypt(zkcommit);
+        if b.is_err() {
+          return Err(TripleRatchetError::CryptoError(b.err().unwrap().to_string()))
+        }
 
         let result = self.dkg_ratchet.receive_commitments(
             *self.peer_id_map.get(peer_id).unwrap(),
-            &b,
+            &b.unwrap(),
         ).unwrap();
 
         if let Some(reveal) = result {
@@ -478,9 +502,16 @@ impl TripleRatchetParticipant {
     }
 
     pub fn recombine(&mut self, peer_id: &[u8], reveal: &P2PChannelEnvelope) -> Result<(), Box<dyn std::error::Error>> {
-        let b = self.peer_channels.get_mut(peer_id).unwrap().ratchet_decrypt(reveal).unwrap();
+        let channel = self.peer_channels.get_mut(peer_id);
+        if channel.is_none() {
+            return Err("Invalid peer channel".into())
+        }
+        let b = channel.unwrap().ratchet_decrypt(reveal);
+        if b.is_err() {
+          return Err(Box::new(TripleRatchetError::CryptoError(b.err().unwrap().to_string())))
+        }
 
-        let rev: FeldmanReveal = serde_json::from_slice(&b).unwrap();
+        let rev: FeldmanReveal = serde_json::from_slice(&b.unwrap()).unwrap();
 
         let done = self.dkg_ratchet.recombine(
             *self.peer_id_map.get(peer_id).unwrap(),
