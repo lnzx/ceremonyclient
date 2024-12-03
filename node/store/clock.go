@@ -1064,8 +1064,7 @@ func (p *PebbleClockStore) DeleteDataClockFrameRange(
 		for _, frame := range frames {
 			err = p.deleteAggregateProofs(txn, frame)
 			if err != nil {
-				txn.Abort()
-				return errors.Wrap(err, "delete data clock frame range")
+				continue
 			}
 		}
 
@@ -1074,14 +1073,12 @@ func (p *PebbleClockStore) DeleteDataClockFrameRange(
 			clockDataParentIndexKey(filter, i, bytes.Repeat([]byte{0xff}, 32)),
 		)
 		if err != nil {
-			txn.Abort()
-			return errors.Wrap(err, "delete data clock frame range")
+			continue
 		}
 
 		err = txn.Delete(clockDataFrameKey(filter, i))
 		if err != nil {
-			txn.Abort()
-			return errors.Wrap(err, "delete data clock frame range")
+			continue
 		}
 	}
 
