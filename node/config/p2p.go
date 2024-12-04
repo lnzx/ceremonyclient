@@ -53,4 +53,6 @@ type P2PConfig struct {
 	PingAttempts              int           `yaml:"pingAttempts"`
 	ValidateQueueSize         int           `yaml:"validateQueueSize"`
 	ValidateWorkers           int           `yaml:"validateWorkers"`
+	SubscriptionQueueSize     int           `yaml:"subscriptionQueueSize"`
+	PeerOutboundQueueSize     int           `yaml:"peerOutboundQueueSize"`
 }

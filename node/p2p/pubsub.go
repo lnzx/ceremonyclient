@@ -6,6 +6,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	"source.quilibrium.com/quilibrium/monorepo/go-libp2p-blossomsub/pb"
 	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
 )
@@ -44,7 +45,7 @@ type PubSub interface {
 		purpose string,
 		server *grpc.Server,
 	) error
-	GetDirectChannel(peerId []byte, purpose string) (*grpc.ClientConn, error)
+	GetDirectChannel(ctx context.Context, peerId []byte, purpose string) (*grpc.ClientConn, error)
 	GetNetworkInfo() *protobufs.NetworkInfoResponse
 	SignMessage(msg []byte) ([]byte, error)
 	GetPublicKey() []byte
@@ -55,4 +56,6 @@ type PubSub interface {
 	Bootstrap(ctx context.Context) error
 	DiscoverPeers(ctx context.Context) error
 	GetNetwork() uint
+	IsPeerConnected(peerId []byte) bool
+	Reachability() *wrapperspb.BoolValue
 }

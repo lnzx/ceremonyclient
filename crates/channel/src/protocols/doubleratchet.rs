@@ -307,7 +307,6 @@ impl DoubleRatchetParticipant {
         }
 
         let (header, should_ratchet) = self.decrypt_header(&envelope.message_header, &self.current_receiving_header_key)?;
-
         let (receiving_ephemeral_key, previous_receiving_chain_length, current_receiving_chain_length) = 
             self.decode_header(&header)?;
 

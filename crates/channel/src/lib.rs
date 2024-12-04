@@ -6,26 +6,33 @@ use protocols::{doubleratchet::{DoubleRatchetParticipant, P2PChannelEnvelope}, t
 
 pub(crate) mod protocols;
 
+uniffi::include_scaffolding!("lib");
+
+#[derive(Clone, PartialEq)]
 pub struct DoubleRatchetStateAndEnvelope {
     pub ratchet_state: String,
     pub envelope: String,
 }
 
+#[derive(Clone, PartialEq)]
 pub struct DoubleRatchetStateAndMessage {
     pub ratchet_state: String,
     pub message: Vec<u8>,
 }
 
+#[derive(Clone, PartialEq)]
 pub struct TripleRatchetStateAndMetadata {
     pub ratchet_state: String,
     pub metadata: HashMap<String, String>,
 }
 
+#[derive(Clone, PartialEq)]
 pub struct TripleRatchetStateAndEnvelope {
     pub ratchet_state: String,
     pub envelope: String,
 }
 
+#[derive(Clone, PartialEq)]
 pub struct TripleRatchetStateAndMessage {
     pub ratchet_state: String,
     pub message: Vec<u8>,
@@ -156,35 +163,35 @@ pub fn double_ratchet_decrypt(ratchet_state_and_envelope: DoubleRatchetStateAndE
 pub fn new_triple_ratchet(peers: &Vec<Vec<u8>>, peer_key: &Vec<u8>, identity_key: &Vec<u8>, signed_pre_key: &Vec<u8>, threshold: u64, async_dkg_ratchet: bool) -> TripleRatchetStateAndMetadata {
     if peer_key.len() != 56 {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "".to_string(),
+            ratchet_state: "invalid peerkey".to_string(),
             metadata: HashMap::new(),
         };
     }
 
     if identity_key.len() != 56 {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "".to_string(),
+            ratchet_state: "invalid idk".to_string(),
             metadata: HashMap::new(),
         };
     }
 
     if signed_pre_key.len() != 56 {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "".to_string(),
+            ratchet_state: "invalid spk".to_string(),
             metadata: HashMap::new(),
         };
     }
 
     if peers.len() < 3 {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "".to_string(),
+            ratchet_state: "invalid peer count".to_string(),
             metadata: HashMap::new(),
         };
     }
 
     if threshold > peers.len() as u64 {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "".to_string(),
+            ratchet_state: "invalid threshold".to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -205,7 +212,7 @@ pub fn new_triple_ratchet(peers: &Vec<Vec<u8>>, peer_key: &Vec<u8>, identity_key
     for pk in peers.iter() {
         if pk.len() != 171 {
             return TripleRatchetStateAndMetadata{
-                ratchet_state: "".to_string(),
+                ratchet_state: "invalid peer key size".to_string(),
                 metadata: HashMap::new(),
             };
         }
@@ -228,7 +235,7 @@ pub fn new_triple_ratchet(peers: &Vec<Vec<u8>>, peer_key: &Vec<u8>, identity_key
 
     if participant.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "".to_string(),
+            ratchet_state: participant.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -239,7 +246,7 @@ pub fn new_triple_ratchet(peers: &Vec<Vec<u8>>, peer_key: &Vec<u8>, identity_key
 
     if participant_json.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "".to_string(),
+            ratchet_state: participant_json.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -261,7 +268,7 @@ fn metadata_to_json(ratchet_state: &String, metadata: HashMap<Vec<u8>, P2PChanne
         let env = v.to_json();
         if env.is_err() {
             return Err(TripleRatchetStateAndMetadata{
-                ratchet_state: ratchet_state.to_string(),
+                ratchet_state: env.err().unwrap().to_string(),
                 metadata: HashMap::new(),
             });
         }
@@ -276,9 +283,15 @@ fn json_to_metadata(ratchet_state_and_metadata: TripleRatchetStateAndMetadata, r
   for (k,v) in ratchet_state_and_metadata.metadata {
       let env = P2PChannelEnvelope::from_json(v);
       let kb = BASE64_STANDARD.decode(k);
-      if env.is_err() || kb.is_err() {
+      if env.is_err() {
           return Err(TripleRatchetStateAndMetadata{
-              ratchet_state: ratchet_state.clone(),
+              ratchet_state: env.err().unwrap().to_string(),
+              metadata: HashMap::new(),
+          });
+      }
+      if kb.is_err() {
+          return Err(TripleRatchetStateAndMetadata{
+              ratchet_state: kb.err().unwrap().to_string(),
               metadata: HashMap::new(),
           });
       }
@@ -293,7 +306,7 @@ pub fn triple_ratchet_init_round_1(ratchet_state_and_metadata: TripleRatchetStat
     let tr = TripleRatchetParticipant::from_json(&ratchet_state);
     if tr.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: tr.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -307,7 +320,7 @@ pub fn triple_ratchet_init_round_1(ratchet_state_and_metadata: TripleRatchetStat
     let result = trp.initialize(&metadata);
     if result.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: result.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -321,7 +334,7 @@ pub fn triple_ratchet_init_round_1(ratchet_state_and_metadata: TripleRatchetStat
     let json = trp.to_json();
     if json.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: json.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -337,7 +350,7 @@ pub fn triple_ratchet_init_round_2(ratchet_state_and_metadata: TripleRatchetStat
     let tr = TripleRatchetParticipant::from_json(&ratchet_state);
     if tr.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: tr.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -353,7 +366,7 @@ pub fn triple_ratchet_init_round_2(ratchet_state_and_metadata: TripleRatchetStat
         let r = trp.receive_poly_frag(&k, &v);
         if r.is_err() {
             return TripleRatchetStateAndMetadata{
-                ratchet_state: ratchet_state,
+                ratchet_state: r.err().unwrap().to_string(),
                 metadata: HashMap::new(),
             };
         }
@@ -372,7 +385,7 @@ pub fn triple_ratchet_init_round_2(ratchet_state_and_metadata: TripleRatchetStat
     let json = trp.to_json();
     if json.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: json.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -388,7 +401,7 @@ pub fn triple_ratchet_init_round_3(ratchet_state_and_metadata: TripleRatchetStat
     let tr = TripleRatchetParticipant::from_json(&ratchet_state);
     if tr.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: tr.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -404,7 +417,7 @@ pub fn triple_ratchet_init_round_3(ratchet_state_and_metadata: TripleRatchetStat
         let r = trp.receive_commitment(&k, &v);
         if r.is_err() {
             return TripleRatchetStateAndMetadata{
-                ratchet_state: ratchet_state,
+                ratchet_state: r.err().unwrap().to_string(),
                 metadata: HashMap::new(),
             };
         }
@@ -423,7 +436,7 @@ pub fn triple_ratchet_init_round_3(ratchet_state_and_metadata: TripleRatchetStat
     let json = trp.to_json();
     if json.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: json.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -439,7 +452,7 @@ pub fn triple_ratchet_init_round_4(ratchet_state_and_metadata: TripleRatchetStat
     let tr = TripleRatchetParticipant::from_json(&ratchet_state);
     if tr.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: tr.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -455,7 +468,7 @@ pub fn triple_ratchet_init_round_4(ratchet_state_and_metadata: TripleRatchetStat
         let r = trp.recombine(&k, &v);
         if r.is_err() {
             return TripleRatchetStateAndMetadata{
-                ratchet_state: ratchet_state,
+                ratchet_state: r.err().unwrap().to_string(),
                 metadata: HashMap::new(),
             };
         }
@@ -469,7 +482,7 @@ pub fn triple_ratchet_init_round_4(ratchet_state_and_metadata: TripleRatchetStat
     let json = trp.to_json();
     if json.is_err() {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: ratchet_state,
+            ratchet_state: json.err().unwrap().to_string(),
             metadata: HashMap::new(),
         };
     }
@@ -485,7 +498,7 @@ pub fn triple_ratchet_encrypt(ratchet_state_and_message: TripleRatchetStateAndMe
     let tr = TripleRatchetParticipant::from_json(&ratchet_state);
     if tr.is_err() {
         return TripleRatchetStateAndEnvelope{
-            ratchet_state: ratchet_state,
+            ratchet_state: tr.err().unwrap().to_string(),
             envelope: "".to_string(),
         };
     }
@@ -495,7 +508,7 @@ pub fn triple_ratchet_encrypt(ratchet_state_and_message: TripleRatchetStateAndMe
 
     if result.is_err() {
         return TripleRatchetStateAndEnvelope{
-            ratchet_state: ratchet_state,
+            ratchet_state: result.err().unwrap().to_string(),
             envelope: "".to_string(),
         };
     }
@@ -505,7 +518,7 @@ pub fn triple_ratchet_encrypt(ratchet_state_and_message: TripleRatchetStateAndMe
 
     if envelope_json.is_err() {
         return TripleRatchetStateAndEnvelope{
-            ratchet_state: ratchet_state,
+            ratchet_state: envelope_json.err().unwrap().to_string(),
             envelope: "".to_string(),
         };
     }
@@ -513,7 +526,7 @@ pub fn triple_ratchet_encrypt(ratchet_state_and_message: TripleRatchetStateAndMe
     let json = trp.to_json();
     if json.is_err() {
         return TripleRatchetStateAndEnvelope{
-            ratchet_state: ratchet_state,
+            ratchet_state: json.err().unwrap().to_string(),
             envelope: "".to_string(),
         };
     }
@@ -529,7 +542,7 @@ pub fn triple_ratchet_decrypt(ratchet_state_and_envelope: TripleRatchetStateAndE
     let tr = TripleRatchetParticipant::from_json(&ratchet_state);
     if tr.is_err() {
         return TripleRatchetStateAndMessage{
-            ratchet_state: ratchet_state,
+            ratchet_state: tr.err().unwrap().to_string(),
             message: vec![],
         };
     }
@@ -538,7 +551,7 @@ pub fn triple_ratchet_decrypt(ratchet_state_and_envelope: TripleRatchetStateAndE
     let env = P2PChannelEnvelope::from_json(ratchet_state_and_envelope.envelope);
     if env.is_err() {
         return TripleRatchetStateAndMessage{
-            ratchet_state: ratchet_state,
+            ratchet_state: env.err().unwrap().to_string(),
             message: vec![],
         };
     }
@@ -547,7 +560,7 @@ pub fn triple_ratchet_decrypt(ratchet_state_and_envelope: TripleRatchetStateAndE
 
     if result.is_err() {
         return TripleRatchetStateAndMessage{
-            ratchet_state: ratchet_state,
+            ratchet_state: result.err().unwrap().to_string(),
             message: vec![],
         };
     }
@@ -557,7 +570,7 @@ pub fn triple_ratchet_decrypt(ratchet_state_and_envelope: TripleRatchetStateAndE
     let json = trp.to_json();
     if json.is_err() {
         return TripleRatchetStateAndMessage{
-            ratchet_state: ratchet_state,
+            ratchet_state: json.err().unwrap().to_string(),
             message: vec![],
         };
     }

@@ -3,6 +3,7 @@ package data
 import (
 	"bytes"
 	"context"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/sha3"
@@ -219,19 +220,25 @@ func (e *DataClockConsensusEngine) prove(
 }
 
 func (e *DataClockConsensusEngine) GetAheadPeers(frameNumber uint64) []internal.PeerCandidate {
-	if e.GetFrameProverTries()[0].Contains(e.provingKeyAddress) {
+	if e.FrameProverTrieContains(0, e.provingKeyAddress) {
 		return nil
 	}
 
+	e.peerMapMx.RLock()
+	peerMapLen, uncooperativePeerMapLen := len(e.peerMap), len(e.uncooperativePeersMap)
+	e.peerMapMx.RUnlock()
+
 	e.logger.Debug(
 		"checking peer list",
-		zap.Int("peers", len(e.peerMap)),
-		zap.Int("uncooperative_peers", len(e.uncooperativePeersMap)),
+		zap.Int("peers", peerMapLen),
+		zap.Int("uncooperative_peers", uncooperativePeerMapLen),
 		zap.Uint64("current_head_frame", frameNumber),
 	)
 
-	candidates := make([]internal.WeightedPeerCandidate, 0, len(e.peerMap))
-	maxDiff := uint64(0)
+	nearCandidates, nearMaxDiff := make([]internal.WeightedPeerCandidate, 0, peerMapLen), uint64(0)
+	reachableCandidates, reachableMaxDiff := make([]internal.WeightedPeerCandidate, 0, peerMapLen), uint64(0)
+	unreachableCandidates, unreachableMaxDiff := make([]internal.WeightedPeerCandidate, 0, peerMapLen), uint64(0)
+	unknownCandidates, unknownMaxDiff := make([]internal.WeightedPeerCandidate, 0, peerMapLen), uint64(0)
 
 	e.peerMapMx.RLock()
 	for _, v := range e.peerMap {
@@ -254,24 +261,54 @@ func (e *DataClockConsensusEngine) GetAheadPeers(frameNumber uint64) []internal.
 		if bytes.Compare(v.version, config.GetMinimumVersion()) < 0 {
 			continue
 		}
-		maxDiff = max(maxDiff, v.maxFrame-frameNumber)
-		candidates = append(candidates, internal.WeightedPeerCandidate{
+		candidate, diff := internal.WeightedPeerCandidate{
 			PeerCandidate: internal.PeerCandidate{
 				PeerID:   v.peerId,
 				MaxFrame: v.maxFrame,
 			},
-		})
+		}, v.maxFrame-frameNumber
+		switch {
+		case e.pubSub.IsPeerConnected(v.peerId):
+			nearMaxDiff = max(nearMaxDiff, diff)
+			nearCandidates = append(nearCandidates, candidate)
+		case v.reachability == nil:
+			unknownMaxDiff = max(unknownMaxDiff, diff)
+			unknownCandidates = append(unknownCandidates, candidate)
+		case v.reachability.Value:
+			reachableMaxDiff = max(reachableMaxDiff, diff)
+			reachableCandidates = append(reachableCandidates, candidate)
+		default:
+			unreachableMaxDiff = max(unreachableMaxDiff, diff)
+			unreachableCandidates = append(unreachableCandidates, candidate)
+		}
 	}
 	e.peerMapMx.RUnlock()
 
-	if len(candidates) == 0 {
+	if len(nearCandidates)+len(reachableCandidates)+len(unreachableCandidates)+len(unknownCandidates) == 0 {
 		return nil
 	}
 
-	for i := range candidates {
-		candidates[i].Weight = float64(candidates[i].MaxFrame-frameNumber) / float64(maxDiff)
+	for _, pair := range []struct {
+		maxDiff    uint64
+		candidates []internal.WeightedPeerCandidate
+	}{
+		{nearMaxDiff, nearCandidates},
+		{reachableMaxDiff, reachableCandidates},
+		{unknownMaxDiff, unknownCandidates},
+		{unreachableMaxDiff, unreachableCandidates},
+	} {
+		maxDiff, candidates := pair.maxDiff, pair.candidates
+		for i := range candidates {
+			candidates[i].Weight = float64(candidates[i].MaxFrame-frameNumber) / float64(maxDiff)
+		}
 	}
-	return internal.WeightedSampleWithoutReplacement(candidates, len(candidates))
+
+	return slices.Concat(
+		internal.WeightedSampleWithoutReplacement(nearCandidates, len(nearCandidates)),
+		internal.WeightedSampleWithoutReplacement(reachableCandidates, len(reachableCandidates)),
+		internal.WeightedSampleWithoutReplacement(unknownCandidates, len(unknownCandidates)),
+		internal.WeightedSampleWithoutReplacement(unreachableCandidates, len(unreachableCandidates)),
+	)
 }
 
 func (e *DataClockConsensusEngine) syncWithPeer(
@@ -288,6 +325,7 @@ func (e *DataClockConsensusEngine) syncWithPeer(
 		zap.Uint64("current_frame", latest.FrameNumber),
 		zap.Uint64("max_frame", maxFrame),
 	)
+
 	var cooperative bool = true
 	defer func() {
 		if cooperative {
@@ -301,7 +339,15 @@ func (e *DataClockConsensusEngine) syncWithPeer(
 			delete(e.peerMap, string(peerId))
 		}
 	}()
-	cc, err := e.pubSub.GetDirectChannel(peerId, "sync")
+
+	syncTimeout := e.config.Engine.SyncTimeout
+	if syncTimeout == 0 {
+		syncTimeout = defaultSyncTimeout
+	}
+
+	dialCtx, cancelDial := context.WithTimeout(e.ctx, syncTimeout)
+	defer cancelDial()
+	cc, err := e.pubSub.GetDirectChannel(dialCtx, peerId, "sync")
 	if err != nil {
 		e.logger.Debug(
 			"could not establish direct channel",
@@ -317,22 +363,16 @@ func (e *DataClockConsensusEngine) syncWithPeer(
 	}()
 
 	client := protobufs.NewDataServiceClient(cc)
-
-	syncTimeout := e.config.Engine.SyncTimeout
-	if syncTimeout == 0 {
-		syncTimeout = defaultSyncTimeout
-	}
-
 	for {
-		ctx, cancel := context.WithTimeout(e.ctx, syncTimeout)
+		getCtx, cancelGet := context.WithTimeout(e.ctx, syncTimeout)
 		response, err := client.GetDataFrame(
-			ctx,
+			getCtx,
 			&protobufs.GetDataFrameRequest{
 				FrameNumber: latest.FrameNumber + 1,
 			},
 			grpc.MaxCallRecvMsgSize(600*1024*1024),
 		)
-		cancel()
+		cancelGet()
 		if err != nil {
 			e.logger.Debug(
 				"could not get frame",

@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	"source.quilibrium.com/quilibrium/monorepo/go-libp2p-blossomsub/pb"
 	"source.quilibrium.com/quilibrium/monorepo/node/consensus"
 	qtime "source.quilibrium.com/quilibrium/monorepo/node/consensus/time"
@@ -64,7 +65,7 @@ func (pubsub) StartDirectChannelListener(
 ) error {
 	return nil
 }
-func (pubsub) GetDirectChannel(peerId []byte, purpose string) (*grpc.ClientConn, error) {
+func (pubsub) GetDirectChannel(ctx context.Context, peerId []byte, purpose string) (*grpc.ClientConn, error) {
 	return nil, nil
 }
 func (pubsub) GetNetworkInfo() *protobufs.NetworkInfoResponse {
@@ -80,6 +81,8 @@ func (pubsub) AddPeerScore(peerId []byte, scoreDelta int64) {}
 func (pubsub) Reconnect(peerId []byte) error                { return nil }
 func (pubsub) Bootstrap(context.Context) error              { return nil }
 func (pubsub) DiscoverPeers(context.Context) error          { return nil }
+func (pubsub) IsPeerConnected(peerId []byte) bool           { return false }
+func (pubsub) Reachability() *wrapperspb.BoolValue          { return nil }
 
 type outputs struct {
 	difficulty  uint32
@@ -123,24 +126,25 @@ func TestHandlePreMidnightMint(t *testing.T) {
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		},
-		currentReceivingSyncPeers: 0,
-		lastFrameReceivedAt:       time.Time{},
-		frameProverTries:          []*tries.RollingFrecencyCritbitTrie{},
-		inclusionProver:           qcrypto.NewKZGInclusionProver(log),
-		syncingStatus:             SyncStatusNotSyncing,
-		peerMap:                   map[string]*peerInfo{},
-		uncooperativePeersMap:     map[string]*peerInfo{},
-		minimumPeersRequired:      0,
-		report:                    nil,
-		frameProver:               qcrypto.NewWesolowskiFrameProver(log),
-		masterTimeReel:            nil,
-		dataTimeReel:              &qtime.DataTimeReel{},
-		peerInfoManager:           nil,
-		frameMessageProcessorCh:   make(chan *pb.Message),
-		txMessageProcessorCh:      make(chan *pb.Message),
-		infoMessageProcessorCh:    make(chan *pb.Message),
-		config:                    nil,
-		preMidnightMint:           map[string]struct{}{},
+		currentReceivingSyncPeers:       0,
+		lastFrameReceivedAt:             time.Time{},
+		frameProverTries:                []*tries.RollingFrecencyCritbitTrie{},
+		inclusionProver:                 qcrypto.NewKZGInclusionProver(log),
+		syncingStatus:                   SyncStatusNotSyncing,
+		peerMap:                         map[string]*peerInfo{},
+		uncooperativePeersMap:           map[string]*peerInfo{},
+		minimumPeersRequired:            0,
+		report:                          nil,
+		frameProver:                     qcrypto.NewWesolowskiFrameProver(log),
+		masterTimeReel:                  nil,
+		dataTimeReel:                    &qtime.DataTimeReel{},
+		peerInfoManager:                 nil,
+		frameMessageProcessorCh:         make(chan *pb.Message),
+		frameFragmentMessageProcessorCh: make(chan *pb.Message),
+		txMessageProcessorCh:            make(chan *pb.Message),
+		infoMessageProcessorCh:          make(chan *pb.Message),
+		config:                          nil,
+		preMidnightMint:                 map[string]struct{}{},
 	}
 
 	d.dataTimeReel.SetHead(&protobufs.ClockFrame{

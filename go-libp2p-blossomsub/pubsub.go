@@ -26,11 +26,14 @@ import (
 	logging "github.com/ipfs/go-log/v2"
 )
 
-// DefaultSoftMaxMessageSize is 10 MiB.
-const DefaultSoftMaxMessageSize = 10 << 20
+// DefaultSoftMaxMessageSize is 1 MiB.
+const DefaultSoftMaxMessageSize = 1 << 20
 
 // DefaultHardMaxMessageSize is 20 MB.
 const DefaultHardMaxMessageSize = 10 << 21
+
+// DefaultPeerOutboundQueueSize is the default size of the outbound message channel that we maintain for each peer.
+const DefaultPeerOutboundQueueSize = 128
 
 var (
 	// TimeCacheDuration specifies how long a message ID will be remembered as seen.

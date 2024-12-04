@@ -11,6 +11,7 @@ import (
 	"math/bits"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
@@ -38,6 +39,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	blossomsub "source.quilibrium.com/quilibrium/monorepo/go-libp2p-blossomsub"
 	"source.quilibrium.com/quilibrium/monorepo/go-libp2p-blossomsub/pb"
 	"source.quilibrium.com/quilibrium/monorepo/node/config"
@@ -71,18 +73,19 @@ type appScore struct {
 }
 
 type BlossomSub struct {
-	ps          *blossomsub.PubSub
-	ctx         context.Context
-	logger      *zap.Logger
-	peerID      peer.ID
-	bitmaskMap  map[string]*blossomsub.Bitmask
-	h           host.Host
-	signKey     crypto.PrivKey
-	peerScore   map[string]*appScore
-	peerScoreMx sync.Mutex
-	network     uint8
-	bootstrap   internal.PeerConnector
-	discovery   internal.PeerConnector
+	ps           *blossomsub.PubSub
+	ctx          context.Context
+	logger       *zap.Logger
+	peerID       peer.ID
+	bitmaskMap   map[string]*blossomsub.Bitmask
+	h            host.Host
+	signKey      crypto.PrivKey
+	peerScore    map[string]*appScore
+	peerScoreMx  sync.Mutex
+	bootstrap    internal.PeerConnector
+	discovery    internal.PeerConnector
+	reachability atomic.Pointer[network.Reachability]
+	p2pConfig    config.P2PConfig
 }
 
 var _ PubSub = (*BlossomSub)(nil)
@@ -157,7 +160,7 @@ func NewBlossomSubStreamer(
 		bitmaskMap: make(map[string]*blossomsub.Bitmask),
 		signKey:    privKey,
 		peerScore:  make(map[string]*appScore),
-		network:    p2pConfig.Network,
+		p2pConfig:  *p2pConfig,
 	}
 
 	h, err := libp2p.New(opts...)
@@ -311,7 +314,7 @@ func NewBlossomSub(
 		bitmaskMap: make(map[string]*blossomsub.Bitmask),
 		signKey:    privKey,
 		peerScore:  make(map[string]*appScore),
-		network:    p2pConfig.Network,
+		p2pConfig:  *p2pConfig,
 	}
 
 	h, err := libp2p.New(opts...)
@@ -337,7 +340,9 @@ func NewBlossomSub(
 				if !ok {
 					return
 				}
-				switch state := evt.(event.EvtLocalReachabilityChanged).Reachability; state {
+				state := evt.(event.EvtLocalReachabilityChanged).Reachability
+				bs.reachability.Store(&state)
+				switch state {
 				case network.ReachabilityPublic:
 					logger.Info("node is externally reachable")
 				case network.ReachabilityPrivate:
@@ -471,6 +476,7 @@ func NewBlossomSub(
 	blossomOpts = append(blossomOpts,
 		blossomsub.WithValidateQueueSize(p2pConfig.ValidateQueueSize),
 		blossomsub.WithValidateWorkers(p2pConfig.ValidateWorkers),
+		blossomsub.WithPeerOutboundQueueSize(p2pConfig.PeerOutboundQueueSize),
 	)
 	blossomOpts = append(blossomOpts, observability.WithPrometheusRawTracer())
 	blossomOpts = append(blossomOpts, blossomsub.WithPeerFilter(internal.NewStaticPeerFilter(
@@ -488,7 +494,7 @@ func NewBlossomSub(
 	))
 
 	params := toBlossomSubParams(p2pConfig)
-	rt := blossomsub.NewBlossomSubRouter(h, params, bs.network)
+	rt := blossomsub.NewBlossomSubRouter(h, params, bs.p2pConfig.Network)
 	blossomOpts = append(blossomOpts, rt.WithDefaultTagTracer())
 	pubsub, err := blossomsub.NewBlossomSubWithRouter(ctx, h, rt, blossomOpts...)
 	if err != nil {
@@ -652,7 +658,7 @@ func (b *BlossomSub) Subscribe(
 	b.logger.Info("subscribe to bitmask", zap.Binary("bitmask", bitmask))
 	subs := []*blossomsub.Subscription{}
 	for _, bit := range bm {
-		sub, err := bit.Subscribe()
+		sub, err := bit.Subscribe(blossomsub.WithBufferSize(b.p2pConfig.SubscriptionQueueSize))
 		if err != nil {
 			b.logger.Error("subscription failed", zap.Error(err))
 			return errors.Wrap(err, "subscribe")
@@ -696,7 +702,9 @@ func (b *BlossomSub) Subscribe(
 }
 
 func (b *BlossomSub) Unsubscribe(bitmask []byte, raw bool) {
-	networkBitmask := append([]byte{b.network}, bitmask...)
+	// TODO: Fix this, it is broken - the bitmask parameter is not sliced, and the
+	// network is not pre-pended to the bitmask.
+	networkBitmask := append([]byte{b.p2pConfig.Network}, bitmask...)
 	bm, ok := b.bitmaskMap[string(networkBitmask)]
 	if !ok {
 		return
@@ -735,7 +743,9 @@ func (b *BlossomSub) GetPeerID() []byte {
 }
 
 func (b *BlossomSub) GetRandomPeer(bitmask []byte) ([]byte, error) {
-	networkBitmask := append([]byte{b.network}, bitmask...)
+	// TODO: Fix this, it is broken - the bitmask parameter is not sliced, and the
+	// network is not pre-pended to the bitmask.
+	networkBitmask := append([]byte{b.p2pConfig.Network}, bitmask...)
 	peers := b.ps.ListPeers(networkBitmask)
 	if len(peers) == 0 {
 		return nil, errors.Wrap(
@@ -750,6 +760,27 @@ func (b *BlossomSub) GetRandomPeer(bitmask []byte) ([]byte, error) {
 	}
 
 	return []byte(peers[sel.Int64()]), nil
+}
+
+func (b *BlossomSub) IsPeerConnected(peerId []byte) bool {
+	peerID := peer.ID(peerId)
+	connectedness := b.h.Network().Connectedness(peerID)
+	return connectedness == network.Connected || connectedness == network.Limited
+}
+
+func (b *BlossomSub) Reachability() *wrapperspb.BoolValue {
+	reachability := b.reachability.Load()
+	if reachability == nil {
+		return nil
+	}
+	switch *reachability {
+	case network.ReachabilityPublic:
+		return wrapperspb.Bool(true)
+	case network.ReachabilityPrivate:
+		return wrapperspb.Bool(false)
+	default:
+		return nil
+	}
 }
 
 func initDHT(
@@ -849,6 +880,8 @@ func (b *BlossomSub) AddPeerScore(peerId []byte, scoreDelta int64) {
 func (b *BlossomSub) GetBitmaskPeers() map[string][]string {
 	peers := map[string][]string{}
 
+	// TODO: Fix this, it is broken - the bitmask parameter is not sliced, and the
+	// network is not pre-pended to the bitmask.
 	for _, k := range b.bitmaskMap {
 		peers[fmt.Sprintf("%+x", k.Bitmask()[1:])] = []string{}
 
@@ -905,7 +938,7 @@ func (b *BlossomSub) GetMultiaddrOfPeer(peerId []byte) string {
 }
 
 func (b *BlossomSub) GetNetwork() uint {
-	return uint(b.network)
+	return uint(b.p2pConfig.Network)
 }
 
 func (b *BlossomSub) StartDirectChannelListener(
@@ -937,7 +970,7 @@ func (c *extraCloseConn) Close() error {
 	return err
 }
 
-func (b *BlossomSub) GetDirectChannel(peerID []byte, purpose string) (
+func (b *BlossomSub) GetDirectChannel(ctx context.Context, peerID []byte, purpose string) (
 	cc *grpc.ClientConn, err error,
 ) {
 	// Kind of a weird hack, but gostream can induce panics if the peer drops at
@@ -954,7 +987,7 @@ func (b *BlossomSub) GetDirectChannel(peerID []byte, purpose string) (
 	// Open question: should we prefix this so a node can run both in mainnet and
 	// testnet? Feels like a bad idea and would be preferable to discourage.
 	cc, err = qgrpc.DialContext(
-		b.ctx,
+		ctx,
 		"passthrough:///",
 		grpc.WithContextDialer(
 			func(ctx context.Context, _ string) (net.Conn, error) {
@@ -991,6 +1024,7 @@ func (b *BlossomSub) GetDirectChannel(peerID []byte, purpose string) (
 			},
 		),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
 	)
 	if err != nil {
 		return nil, errors.Wrap(err, "dial context")
@@ -1137,6 +1171,12 @@ func withDefaults(p2pConfig *config.P2PConfig) *config.P2PConfig {
 	}
 	if p2pConfig.ValidateWorkers == 0 {
 		p2pConfig.ValidateWorkers = qruntime.WorkerCount(0, false)
+	}
+	if p2pConfig.SubscriptionQueueSize == 0 {
+		p2pConfig.SubscriptionQueueSize = blossomsub.DefaultSubscriptionQueueSize
+	}
+	if p2pConfig.PeerOutboundQueueSize == 0 {
+		p2pConfig.PeerOutboundQueueSize = blossomsub.DefaultPeerOutboundQueueSize
 	}
 	return p2pConfig
 }

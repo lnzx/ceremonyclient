@@ -21,9 +21,11 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	"source.quilibrium.com/quilibrium/monorepo/go-libp2p-blossomsub/pb"
 	"source.quilibrium.com/quilibrium/monorepo/node/config"
 	"source.quilibrium.com/quilibrium/monorepo/node/consensus"
+	"source.quilibrium.com/quilibrium/monorepo/node/consensus/data/fragmentation"
 	qtime "source.quilibrium.com/quilibrium/monorepo/node/consensus/time"
 	qcrypto "source.quilibrium.com/quilibrium/monorepo/node/crypto"
 	"source.quilibrium.com/quilibrium/monorepo/node/execution"
@@ -58,6 +60,7 @@ type peerInfo struct {
 	version       []byte
 	patchVersion  byte
 	totalDistance []byte
+	reachability  *wrapperspb.BoolValue
 }
 
 type ChannelServer = protobufs.DataService_GetPublicChannelServer
@@ -105,39 +108,42 @@ type DataClockConsensusEngine struct {
 	currentReceivingSyncPeers   int
 	announcedJoin               int
 
-	frameChan                      chan *protobufs.ClockFrame
-	executionEngines               map[string]execution.ExecutionEngine
-	filter                         []byte
-	txFilter                       []byte
-	infoFilter                     []byte
-	frameFilter                    []byte
-	input                          []byte
-	parentSelector                 []byte
-	syncingStatus                  SyncStatusType
-	syncingTarget                  []byte
-	previousHead                   *protobufs.ClockFrame
-	engineMx                       sync.Mutex
-	dependencyMapMx                sync.Mutex
-	stagedTransactions             *protobufs.TokenRequests
-	stagedTransactionsSet          map[string]struct{}
-	stagedTransactionsMx           sync.Mutex
-	validationFilter               map[string]struct{}
-	validationFilterMx             sync.Mutex
-	peerMapMx                      sync.RWMutex
-	peerAnnounceMapMx              sync.Mutex
-	lastKeyBundleAnnouncementFrame uint64
-	peerMap                        map[string]*peerInfo
-	uncooperativePeersMap          map[string]*peerInfo
-	frameMessageProcessorCh        chan *pb.Message
-	txMessageProcessorCh           chan *pb.Message
-	infoMessageProcessorCh         chan *pb.Message
-	report                         *protobufs.SelfTestReport
-	clients                        []protobufs.DataIPCServiceClient
-	grpcRateLimiter                *RateLimiter
-	previousFrameProven            *protobufs.ClockFrame
-	previousTree                   *mt.MerkleTree
-	clientReconnectTest            int
-	requestSyncCh                  chan struct{}
+	frameChan                       chan *protobufs.ClockFrame
+	executionEngines                map[string]execution.ExecutionEngine
+	filter                          []byte
+	txFilter                        []byte
+	infoFilter                      []byte
+	frameFilter                     []byte
+	frameFragmentFilter             []byte
+	input                           []byte
+	parentSelector                  []byte
+	syncingStatus                   SyncStatusType
+	syncingTarget                   []byte
+	previousHead                    *protobufs.ClockFrame
+	engineMx                        sync.Mutex
+	dependencyMapMx                 sync.Mutex
+	stagedTransactions              *protobufs.TokenRequests
+	stagedTransactionsSet           map[string]struct{}
+	stagedTransactionsMx            sync.Mutex
+	validationFilter                map[string]struct{}
+	validationFilterMx              sync.Mutex
+	peerMapMx                       sync.RWMutex
+	peerAnnounceMapMx               sync.Mutex
+	lastKeyBundleAnnouncementFrame  uint64
+	peerMap                         map[string]*peerInfo
+	uncooperativePeersMap           map[string]*peerInfo
+	frameMessageProcessorCh         chan *pb.Message
+	frameFragmentMessageProcessorCh chan *pb.Message
+	txMessageProcessorCh            chan *pb.Message
+	infoMessageProcessorCh          chan *pb.Message
+	report                          *protobufs.SelfTestReport
+	clients                         []protobufs.DataIPCServiceClient
+	grpcRateLimiter                 *RateLimiter
+	previousFrameProven             *protobufs.ClockFrame
+	previousTree                    *mt.MerkleTree
+	clientReconnectTest             int
+	requestSyncCh                   chan struct{}
+	clockFrameFragmentBuffer        fragmentation.ClockFrameFragmentBuffer
 }
 
 var _ consensus.DataConsensusEngine = (*DataClockConsensusEngine)(nil)
@@ -227,6 +233,14 @@ func NewDataClockConsensusEngine(
 		rateLimit = 10
 	}
 
+	clockFrameFragmentBuffer, err := fragmentation.NewClockFrameFragmentCircularBuffer(
+		fragmentation.NewReedSolomonClockFrameFragmentBuffer,
+		16,
+	)
+	if err != nil {
+		panic(err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &DataClockConsensusEngine{
 		ctx:              ctx,
@@ -249,30 +263,32 @@ func NewDataClockConsensusEngine(
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		},
-		currentReceivingSyncPeers: 0,
-		lastFrameReceivedAt:       time.Time{},
-		frameProverTries:          []*tries.RollingFrecencyCritbitTrie{},
-		inclusionProver:           inclusionProver,
-		syncingStatus:             SyncStatusNotSyncing,
-		peerMap:                   map[string]*peerInfo{},
-		uncooperativePeersMap:     map[string]*peerInfo{},
-		minimumPeersRequired:      minimumPeersRequired,
-		report:                    report,
-		frameProver:               frameProver,
-		masterTimeReel:            masterTimeReel,
-		dataTimeReel:              dataTimeReel,
-		peerInfoManager:           peerInfoManager,
-		frameMessageProcessorCh:   make(chan *pb.Message, 65536),
-		txMessageProcessorCh:      make(chan *pb.Message, 65536),
-		infoMessageProcessorCh:    make(chan *pb.Message, 65536),
-		config:                    cfg,
-		preMidnightMint:           map[string]struct{}{},
+		currentReceivingSyncPeers:       0,
+		lastFrameReceivedAt:             time.Time{},
+		frameProverTries:                []*tries.RollingFrecencyCritbitTrie{},
+		inclusionProver:                 inclusionProver,
+		syncingStatus:                   SyncStatusNotSyncing,
+		peerMap:                         map[string]*peerInfo{},
+		uncooperativePeersMap:           map[string]*peerInfo{},
+		minimumPeersRequired:            minimumPeersRequired,
+		report:                          report,
+		frameProver:                     frameProver,
+		masterTimeReel:                  masterTimeReel,
+		dataTimeReel:                    dataTimeReel,
+		peerInfoManager:                 peerInfoManager,
+		frameMessageProcessorCh:         make(chan *pb.Message, 65536),
+		frameFragmentMessageProcessorCh: make(chan *pb.Message, 65536),
+		txMessageProcessorCh:            make(chan *pb.Message, 65536),
+		infoMessageProcessorCh:          make(chan *pb.Message, 65536),
+		config:                          cfg,
+		preMidnightMint:                 map[string]struct{}{},
 		grpcRateLimiter: NewRateLimiter(
 			rateLimit,
 			time.Minute,
 		),
-		requestSyncCh:    make(chan struct{}, 1),
-		validationFilter: map[string]struct{}{},
+		requestSyncCh:            make(chan struct{}, 1),
+		validationFilter:         map[string]struct{}{},
+		clockFrameFragmentBuffer: clockFrameFragmentBuffer,
 	}
 
 	logger.Info("constructing consensus engine")
@@ -285,6 +301,7 @@ func NewDataClockConsensusEngine(
 	e.txFilter = append([]byte{0x00}, e.filter...)
 	e.infoFilter = append([]byte{0x00, 0x00}, e.filter...)
 	e.frameFilter = append([]byte{0x00, 0x00, 0x00}, e.filter...)
+	e.frameFragmentFilter = append([]byte{0x00, 0x00, 0x00, 0x00}, e.filter...)
 	e.input = seed
 	e.provingKey = signer
 	e.provingKeyType = keyType
@@ -317,22 +334,25 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 		panic(err)
 	}
 
-	e.wg.Add(3)
+	e.wg.Add(4)
 	go e.runFrameMessageHandler()
+	go e.runFrameFragmentMessageHandler()
 	go e.runTxMessageHandler()
 	go e.runInfoMessageHandler()
 
 	e.logger.Info("subscribing to pubsub messages")
 	e.pubSub.RegisterValidator(e.frameFilter, e.validateFrameMessage, true)
+	e.pubSub.RegisterValidator(e.frameFragmentFilter, e.validateFrameFragmentMessage, true)
 	e.pubSub.RegisterValidator(e.txFilter, e.validateTxMessage, true)
 	e.pubSub.RegisterValidator(e.infoFilter, e.validateInfoMessage, true)
 	e.pubSub.Subscribe(e.frameFilter, e.handleFrameMessage)
+	e.pubSub.Subscribe(e.frameFragmentFilter, e.handleFrameFragmentMessage)
 	e.pubSub.Subscribe(e.txFilter, e.handleTxMessage)
 	e.pubSub.Subscribe(e.infoFilter, e.handleInfoMessage)
 	go func() {
 		server := qgrpc.NewServer(
-			grpc.MaxSendMsgSize(20*1024*1024),
-			grpc.MaxRecvMsgSize(20*1024*1024),
+			grpc.MaxSendMsgSize(40*1024*1024),
+			grpc.MaxRecvMsgSize(40*1024*1024),
 		)
 		protobufs.RegisterDataServiceServer(server, e)
 		if err := e.pubSub.StartDirectChannelListener(
@@ -431,6 +451,8 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 			frame = nextFrame
 
 			timestamp := time.Now().UnixMilli()
+			reachability := e.pubSub.Reachability()
+
 			list := &protobufs.DataPeerListAnnounce{
 				Peer: &protobufs.DataPeer{
 					PeerId:       nil,
@@ -442,6 +464,7 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 					TotalDistance: e.dataTimeReel.GetTotalDistance().FillBytes(
 						make([]byte, 256),
 					),
+					ExternallyReachable: reachability,
 				},
 			}
 
@@ -463,6 +486,7 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 				totalDistance: e.dataTimeReel.GetTotalDistance().FillBytes(
 					make([]byte, 256),
 				),
+				reachability: reachability,
 			}
 			deletes := []*peerInfo{}
 			for _, v := range e.peerMap {
@@ -498,7 +522,7 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 			)
 
 			if err := e.publishMessage(e.infoFilter, list); err != nil {
-				e.logger.Debug("error publishing message", zap.Error(err))
+				e.logger.Debug("error publishing data peer list announce", zap.Error(err))
 			}
 
 			if thresholdBeforeConfirming > 0 {
@@ -656,7 +680,9 @@ func (e *DataClockConsensusEngine) Stop(force bool) <-chan error {
 		panic(err)
 	}
 
-	e.publishMessage(e.txFilter, pause.TokenRequest())
+	if err := e.publishMessage(e.txFilter, pause.TokenRequest()); err != nil {
+		e.logger.Warn("error publishing prover pause", zap.Error(err))
+	}
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(e.executionEngines))
@@ -678,9 +704,11 @@ func (e *DataClockConsensusEngine) Stop(force bool) <-chan error {
 	}
 
 	e.pubSub.Unsubscribe(e.frameFilter, false)
+	e.pubSub.Unsubscribe(e.frameFragmentFilter, false)
 	e.pubSub.Unsubscribe(e.txFilter, false)
 	e.pubSub.Unsubscribe(e.infoFilter, false)
 	e.pubSub.UnregisterValidator(e.frameFilter)
+	e.pubSub.UnregisterValidator(e.frameFragmentFilter)
 	e.pubSub.UnregisterValidator(e.txFilter)
 	e.pubSub.UnregisterValidator(e.infoFilter)
 
