@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"source.quilibrium.com/quilibrium/monorepo/node/config"
+	qcrypto "source.quilibrium.com/quilibrium/monorepo/node/crypto"
 	qruntime "source.quilibrium.com/quilibrium/monorepo/node/internal/runtime"
 	"source.quilibrium.com/quilibrium/monorepo/node/p2p"
 	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
@@ -37,6 +38,7 @@ type TokenApplication struct {
 	PubSub       p2p.PubSub
 	Logger       *zap.Logger
 	Difficulty   uint32
+	FrameProver  qcrypto.FrameProver
 }
 
 func GetOutputsFromClockFrame(
@@ -86,6 +88,7 @@ func MaterializeApplicationFromFrame(
 	clockStore store.ClockStore,
 	pubSub p2p.PubSub,
 	logger *zap.Logger,
+	frameProver qcrypto.FrameProver,
 ) (*TokenApplication, error) {
 	_, tokenOutputs, err := GetOutputsFromClockFrame(frame)
 	if err != nil {
@@ -103,6 +106,7 @@ func MaterializeApplicationFromFrame(
 		Logger:       logger,
 		PubSub:       pubSub,
 		Difficulty:   frame.Difficulty,
+		FrameProver:  frameProver,
 	}, nil
 }
 
@@ -144,6 +148,32 @@ func (a *TokenApplication) ApplyTransitions(
 		requests = transitions.Requests
 	}
 
+	set := make([]*protobufs.TokenRequest, len(requests))
+	fails := make([]*protobufs.TokenRequest, len(requests))
+
+	wg := sync.WaitGroup{}
+	throttle := make(chan struct{}, qruntime.WorkerCount(0, false))
+
+	for i, transition := range requests {
+		switch t := transition.Request.(type) {
+		case *protobufs.TokenRequest_Mint:
+			if t == nil {
+				fails[i] = transition
+				continue
+			}
+			throttle <- struct{}{}
+			wg.Add(1)
+			go func(i int, transition *protobufs.TokenRequest) {
+				defer func() { <-throttle }()
+				defer wg.Done()
+				if err := t.Mint.Validate(); err != nil {
+					fails[i] = transition
+				}
+			}(i, transition)
+		}
+	}
+	wg.Wait()
+
 	parallelismMap := map[int]uint64{}
 	if len(a.Tries) > 1 {
 		for i := range a.Tries[1:] {
@@ -153,38 +183,30 @@ func (a *TokenApplication) ApplyTransitions(
 
 	seen := map[string]struct{}{}
 
-	set := make([]*protobufs.TokenRequest, len(requests))
-	fails := make([]*protobufs.TokenRequest, len(set))
-	outputsSet := make([][]*protobufs.TokenOutput, len(set))
-
 	for i, transition := range requests {
-		i := i
+		if fails[i] != nil {
+			continue
+		}
 		switch t := transition.Request.(type) {
 		case *protobufs.TokenRequest_Mint:
-			if t == nil {
-				fails[i] = transition
-				continue
-			}
-			if err := t.Mint.Validate(); err != nil {
-				fails[i] = transition
-				continue
-			}
-
-			addr, err := poseidon.HashBytes(
-				t.Mint.Signature.PublicKey.KeyValue,
-			)
-			if err != nil {
-				fails[i] = transition
-				continue
-			}
-
-			if len(t.Mint.Proofs) == 1 && a.Tries[0].Contains(
-				addr.FillBytes(make([]byte, 32)),
-			) && bytes.Equal(t.Mint.Signature.PublicKey.KeyValue, a.Beacon) {
-				if _, ok := seen[string(t.Mint.Proofs[0][32:])]; !ok {
-					set[i] = transition
-					seen[string(t.Mint.Proofs[0][32:])] = struct{}{}
+			if len(t.Mint.Proofs) == 1 {
+				addr, err := poseidon.HashBytes(
+					t.Mint.Signature.PublicKey.KeyValue,
+				)
+				if err != nil {
+					fails[i] = transition
+					continue
 				}
+				if a.Tries[0].Contains(addr.FillBytes(make([]byte, 32))) &&
+					bytes.Equal(t.Mint.Signature.PublicKey.KeyValue, a.Beacon) {
+					if _, ok := seen[string(t.Mint.Proofs[0][32:])]; !ok {
+						set[i] = transition
+						seen[string(t.Mint.Proofs[0][32:])] = struct{}{}
+						continue
+					}
+				}
+				fails[i] = transition
+				continue
 			} else if len(t.Mint.Proofs) >= 3 && currentFrameNumber > PROOF_FRAME_CUTOFF {
 				frameNumber := binary.BigEndian.Uint64(t.Mint.Proofs[2])
 				if frameNumber < currentFrameNumber-2 {
@@ -222,6 +244,7 @@ func (a *TokenApplication) ApplyTransitions(
 		}
 	}
 
+	outputsSet := make([][]*protobufs.TokenOutput, len(set))
 	successes := make([]*protobufs.TokenRequest, len(set))
 	for i, transition := range set {
 		if transition == nil {
@@ -363,18 +386,15 @@ func (a *TokenApplication) ApplyTransitions(
 		}
 	}
 
-	wg := sync.WaitGroup{}
-	throttle := make(chan struct{}, qruntime.WorkerCount(0, false))
 	for i, transition := range set {
 		if transition == nil {
 			continue
 		}
-		i, transition := i, transition
 		switch t := transition.Request.(type) {
 		case *protobufs.TokenRequest_Mint:
 			throttle <- struct{}{}
 			wg.Add(1)
-			go func() {
+			go func(i int, transition *protobufs.TokenRequest) {
 				defer func() { <-throttle }()
 				defer wg.Done()
 				success, err := a.handleMint(
@@ -389,7 +409,7 @@ func (a *TokenApplication) ApplyTransitions(
 				}
 				outputsSet[i] = success
 				successes[i] = transition
-			}()
+			}(i, transition)
 		}
 	}
 	wg.Wait()

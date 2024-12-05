@@ -12,7 +12,6 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/sha3"
-	"source.quilibrium.com/quilibrium/monorepo/node/crypto"
 	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
 	"source.quilibrium.com/quilibrium/monorepo/node/store"
 	"source.quilibrium.com/quilibrium/monorepo/node/tries"
@@ -58,16 +57,17 @@ func (a *TokenApplication) handleMint(
 	if err != nil {
 		return nil, errors.Wrap(ErrInvalidStateTransition, "handle mint")
 	}
+	addrBytes := addr.FillBytes(make([]byte, 32))
 
 	altAddr, err := poseidon.HashBytes([]byte(peerId))
 	if err != nil {
 		return nil, errors.Wrap(ErrInvalidStateTransition, "handle mint")
 	}
+	altAddrBytes := altAddr.FillBytes(make([]byte, 32))
 
 	// todo: set termination frame for this:
-	if len(t.Proofs) == 1 && a.Tries[0].Contains(
-		addr.FillBytes(make([]byte, 32)),
-	) && bytes.Equal(t.Signature.PublicKey.KeyValue, a.Beacon) {
+	if len(t.Proofs) == 1 && a.Tries[0].Contains(addrBytes) &&
+		bytes.Equal(t.Signature.PublicKey.KeyValue, a.Beacon) {
 		if len(t.Proofs[0]) != 64 {
 			return nil, errors.Wrap(ErrInvalidStateTransition, "handle mint")
 		}
@@ -126,14 +126,12 @@ func (a *TokenApplication) handleMint(
 		)
 		ring := -1
 		for i, t := range a.Tries[1:] {
-			if t.Contains(altAddr.FillBytes(make([]byte, 32))) {
+			if t.Contains(altAddrBytes) {
 				ring = i
 			}
 		}
 
-		_, prfs, err := a.CoinStore.GetPreCoinProofsForOwner(
-			altAddr.FillBytes(make([]byte, 32)),
-		)
+		_, prfs, err := a.CoinStore.GetPreCoinProofsForOwner(altAddrBytes)
 		if err != nil {
 			return nil, errors.Wrap(ErrInvalidStateTransition, "handle mint")
 		}
@@ -167,7 +165,7 @@ func (a *TokenApplication) handleMint(
 									Account: &protobufs.AccountRef_ImplicitAccount{
 										ImplicitAccount: &protobufs.ImplicitAccount{
 											ImplicitType: 0,
-											Address:      altAddr.FillBytes(make([]byte, 32)),
+											Address:      altAddrBytes,
 										},
 									},
 								},
@@ -195,7 +193,7 @@ func (a *TokenApplication) handleMint(
 							Account: &protobufs.AccountRef_ImplicitAccount{
 								ImplicitAccount: &protobufs.ImplicitAccount{
 									ImplicitType: 0,
-									Address:      altAddr.FillBytes(make([]byte, 32)),
+									Address:      altAddrBytes,
 								},
 							},
 						},
@@ -255,7 +253,7 @@ func (a *TokenApplication) handleMint(
 								Account: &protobufs.AccountRef_ImplicitAccount{
 									ImplicitAccount: &protobufs.ImplicitAccount{
 										ImplicitType: 0,
-										Address:      altAddr.FillBytes(make([]byte, 32)),
+										Address:      altAddrBytes,
 									},
 								},
 							},
@@ -293,7 +291,7 @@ func (a *TokenApplication) handleMint(
 								Account: &protobufs.AccountRef_ImplicitAccount{
 									ImplicitAccount: &protobufs.ImplicitAccount{
 										ImplicitType: 0,
-										Address:      altAddr.FillBytes(make([]byte, 32)),
+										Address:      altAddrBytes,
 									},
 								},
 							},
@@ -302,9 +300,8 @@ func (a *TokenApplication) handleMint(
 				}}, nil
 			}
 
-			wesoProver := crypto.NewWesolowskiFrameProver(a.Logger)
 			if bytes.Equal(leaf, bytes.Repeat([]byte{0x00}, 516)) ||
-				!wesoProver.VerifyChallengeProof(
+				!a.FrameProver.VerifyChallengeProof(
 					individualChallenge,
 					frame.Difficulty,
 					leaf,
@@ -339,6 +336,7 @@ func (a *TokenApplication) handleMint(
 			}
 			storage.Quo(storage, big.NewInt(int64(m)))
 			storage.Mul(storage, big.NewInt(int64(parallelism)))
+			storageBytes := storage.FillBytes(make([]byte, 32))
 
 			a.Logger.Debug(
 				"issued reward",
@@ -356,14 +354,14 @@ func (a *TokenApplication) handleMint(
 								append([]byte{}, newCommitment...),
 								newFrameNumber,
 							),
-							Amount:     storage.FillBytes(make([]byte, 32)),
+							Amount:     storageBytes,
 							Proof:      payload,
 							Difficulty: a.Difficulty,
 							Owner: &protobufs.AccountRef{
 								Account: &protobufs.AccountRef_ImplicitAccount{
 									ImplicitAccount: &protobufs.ImplicitAccount{
 										ImplicitType: 0,
-										Address:      altAddr.FillBytes(make([]byte, 32)),
+										Address:      altAddrBytes,
 									},
 								},
 							},
@@ -373,13 +371,13 @@ func (a *TokenApplication) handleMint(
 				&protobufs.TokenOutput{
 					Output: &protobufs.TokenOutput_Coin{
 						Coin: &protobufs.Coin{
-							Amount:       storage.FillBytes(make([]byte, 32)),
+							Amount:       storageBytes,
 							Intersection: make([]byte, 1024),
 							Owner: &protobufs.AccountRef{
 								Account: &protobufs.AccountRef_ImplicitAccount{
 									ImplicitAccount: &protobufs.ImplicitAccount{
 										ImplicitType: 0,
-										Address:      altAddr.FillBytes(make([]byte, 32)),
+										Address:      altAddrBytes,
 									},
 								},
 							},
@@ -403,7 +401,7 @@ func (a *TokenApplication) handleMint(
 								Account: &protobufs.AccountRef_ImplicitAccount{
 									ImplicitAccount: &protobufs.ImplicitAccount{
 										ImplicitType: 0,
-										Address:      altAddr.FillBytes(make([]byte, 32)),
+										Address:      altAddrBytes,
 									},
 								},
 							},
@@ -421,7 +419,7 @@ func (a *TokenApplication) handleMint(
 								Account: &protobufs.AccountRef_ImplicitAccount{
 									ImplicitAccount: &protobufs.ImplicitAccount{
 										ImplicitType: 0,
-										Address:      altAddr.FillBytes(make([]byte, 32)),
+										Address:      altAddrBytes,
 									},
 								},
 							},
