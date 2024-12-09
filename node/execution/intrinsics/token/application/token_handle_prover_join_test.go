@@ -181,29 +181,30 @@ func TestHandleProverJoin(t *testing.T) {
 	assert.Len(t, success.Requests, 1)
 	assert.Len(t, app.TokenOutputs.Outputs, 1)
 	txn, _ = app.CoinStore.NewTransaction(false)
+	stateTree := &qcrypto.VectorCommitmentTree{}
 	for i, o := range app.TokenOutputs.Outputs {
 		switch e := o.Output.(type) {
 		case *protobufs.TokenOutput_Coin:
 			a, err := token.GetAddressOfCoin(e.Coin, 1, uint64(i))
 			assert.NoError(t, err)
-			err = app.CoinStore.PutCoin(txn, 1, a, e.Coin)
+			err = app.CoinStore.PutCoin(txn, 1, a, e.Coin, stateTree)
 			assert.NoError(t, err)
 		case *protobufs.TokenOutput_DeletedCoin:
 			c, err := app.CoinStore.GetCoinByAddress(txn, e.DeletedCoin.Address)
 			assert.NoError(t, err)
-			err = app.CoinStore.DeleteCoin(txn, e.DeletedCoin.Address, c)
+			err = app.CoinStore.DeleteCoin(txn, e.DeletedCoin.Address, c, stateTree)
 			assert.NoError(t, err)
 		case *protobufs.TokenOutput_Proof:
 			a, err := token.GetAddressOfPreCoinProof(e.Proof)
 			assert.NoError(t, err)
-			err = app.CoinStore.PutPreCoinProof(txn, 1, a, e.Proof)
+			err = app.CoinStore.PutPreCoinProof(txn, 1, a, e.Proof, stateTree)
 			assert.NoError(t, err)
 		case *protobufs.TokenOutput_DeletedProof:
 			a, err := token.GetAddressOfPreCoinProof(e.DeletedProof)
 			assert.NoError(t, err)
 			c, err := app.CoinStore.GetPreCoinProofByAddress(a)
 			assert.NoError(t, err)
-			err = app.CoinStore.DeletePreCoinProof(txn, a, c)
+			err = app.CoinStore.DeletePreCoinProof(txn, a, c, stateTree)
 			assert.NoError(t, err)
 		}
 	}

@@ -104,6 +104,7 @@ type TokenExecutionEngine struct {
 	intrinsicFilter       []byte
 	frameProver           qcrypto.FrameProver
 	peerSeniority         *PeerSeniority
+	stateTree             *qcrypto.VectorCommitmentTree
 }
 
 func NewTokenExecutionEngine(
@@ -137,6 +138,7 @@ func NewTokenExecutionEngine(
 	var inclusionProof *qcrypto.InclusionAggregateProof
 	var proverKeys [][]byte
 	var peerSeniority map[string]uint64
+	stateTree := &qcrypto.VectorCommitmentTree{}
 
 	if err != nil && errors.Is(err, store.ErrNotFound) {
 		origin, inclusionProof, proverKeys, peerSeniority = CreateGenesisState(
@@ -146,6 +148,7 @@ func NewTokenExecutionEngine(
 			inclusionProver,
 			clockStore,
 			coinStore,
+			stateTree,
 			uint(cfg.P2P.Network),
 		)
 		if err := coinStore.SetMigrationVersion(
@@ -172,6 +175,7 @@ func NewTokenExecutionEngine(
 				inclusionProver,
 				clockStore,
 				coinStore,
+				stateTree,
 				uint(cfg.P2P.Network),
 			)
 		}
@@ -342,6 +346,15 @@ func NewTokenExecutionEngine(
 	e.proverPublicKey = publicKeyBytes
 	e.provingKeyAddress = provingKeyAddress
 
+	e.stateTree, err = e.clockStore.GetDataStateTree(e.intrinsicFilter)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		panic(err)
+	}
+
+	if e.stateTree == nil {
+		e.rebuildStateTree()
+	}
+
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -405,6 +418,45 @@ func NewTokenExecutionEngine(
 }
 
 var _ execution.ExecutionEngine = (*TokenExecutionEngine)(nil)
+
+func (e *TokenExecutionEngine) rebuildStateTree() {
+	e.logger.Info("rebuilding state tree")
+	e.stateTree = &qcrypto.VectorCommitmentTree{}
+	iter, err := e.coinStore.RangeCoins()
+	if err != nil {
+		panic(err)
+	}
+	for iter.First(); iter.Valid(); iter.Next() {
+		e.stateTree.Insert(iter.Key()[2:], iter.Value())
+	}
+	iter.Close()
+
+	iter, err = e.coinStore.RangePreCoinProofs()
+	if err != nil {
+		panic(err)
+	}
+	for iter.First(); iter.Valid(); iter.Next() {
+		e.stateTree.Insert(iter.Key()[2:], iter.Value())
+	}
+	iter.Close()
+	e.logger.Info("saving rebuilt state tree")
+
+	txn, err := e.clockStore.NewTransaction(false)
+	if err != nil {
+		panic(err)
+	}
+
+	err = e.clockStore.SetDataStateTree(txn, e.intrinsicFilter, e.stateTree)
+	if err != nil {
+		txn.Abort()
+		panic(err)
+	}
+
+	if err = txn.Commit(); err != nil {
+		txn.Abort()
+		panic(err)
+	}
+}
 
 // GetName implements ExecutionEngine
 func (*TokenExecutionEngine) GetName() string {
@@ -571,6 +623,12 @@ func (e *TokenExecutionEngine) ProcessFrame(
 	}
 	wg.Wait()
 
+	stateTree, err := e.clockStore.GetDataStateTree(e.intrinsicFilter)
+	if err != nil {
+		txn.Abort()
+		return nil, errors.Wrap(err, "process frame")
+	}
+
 	for i, output := range app.TokenOutputs.Outputs {
 		switch o := output.Output.(type) {
 		case *protobufs.TokenOutput_Coin:
@@ -584,6 +642,7 @@ func (e *TokenExecutionEngine) ProcessFrame(
 				frame.FrameNumber,
 				address,
 				o.Coin,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -599,6 +658,7 @@ func (e *TokenExecutionEngine) ProcessFrame(
 				txn,
 				o.DeletedCoin.Address,
 				coin,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -615,6 +675,7 @@ func (e *TokenExecutionEngine) ProcessFrame(
 				frame.FrameNumber,
 				address,
 				o.Proof,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -652,6 +713,7 @@ func (e *TokenExecutionEngine) ProcessFrame(
 				txn,
 				address,
 				o.DeletedProof,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -967,6 +1029,18 @@ func (e *TokenExecutionEngine) ProcessFrame(
 			return nil, errors.Wrap(err, "process frame")
 		}
 	}
+
+	err = e.clockStore.SetDataStateTree(
+		txn,
+		e.intrinsicFilter,
+		stateTree,
+	)
+	if err != nil {
+		txn.Abort()
+		return nil, errors.Wrap(err, "process frame")
+	}
+
+	e.stateTree = stateTree
 
 	return app.Tries, nil
 }

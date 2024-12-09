@@ -633,7 +633,8 @@ func RunForkRepairIfNeeded(
 					fmt.Println(err)
 					return
 				}
-				if err = coinStore.DeleteCoin(txn, address, coin); err != nil {
+				stateTree := &qcrypto.VectorCommitmentTree{}
+				if err = coinStore.DeleteCoin(txn, address, coin, stateTree); err != nil {
 					txn.Abort()
 					fmt.Println(err)
 					return
@@ -646,7 +647,8 @@ func RunForkRepairIfNeeded(
 					fmt.Println(err)
 					return
 				}
-				if err = coinStore.DeletePreCoinProof(txn, address, proof); err != nil {
+				stateTree := &qcrypto.VectorCommitmentTree{}
+				if err = coinStore.DeletePreCoinProof(txn, address, proof, stateTree); err != nil {
 					txn.Abort()
 					fmt.Println(err)
 					return
@@ -819,11 +821,13 @@ func processFrame(
 				txn.Abort()
 				return nil, errors.Wrap(err, "process frame")
 			}
+			stateTree := &qcrypto.VectorCommitmentTree{}
 			err = coinStore.PutCoin(
 				txn,
 				frame.FrameNumber,
 				address,
 				o.Coin,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -839,10 +843,12 @@ func processFrame(
 				txn.Abort()
 				return nil, errors.Wrap(err, "process frame")
 			}
+			stateTree := &qcrypto.VectorCommitmentTree{}
 			err = coinStore.DeleteCoin(
 				txn,
 				o.DeletedCoin.Address,
 				coin,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -854,11 +860,13 @@ func processFrame(
 				txn.Abort()
 				return nil, errors.Wrap(err, "process frame")
 			}
+			stateTree := &qcrypto.VectorCommitmentTree{}
 			err = coinStore.PutPreCoinProof(
 				txn,
 				frame.FrameNumber,
 				address,
 				o.Proof,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -889,10 +897,12 @@ func processFrame(
 				txn.Abort()
 				return nil, errors.Wrap(err, "process frame")
 			}
+			stateTree := &qcrypto.VectorCommitmentTree{}
 			err = coinStore.DeletePreCoinProof(
 				txn,
 				address,
 				o.DeletedProof,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()

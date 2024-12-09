@@ -458,11 +458,13 @@ func (e *DataClockConsensusEngine) handleMint(
 				return nil, errors.Wrap(err, "handle mint")
 			}
 			returnAddr = proofAddr
+			stateTree := &crypto.VectorCommitmentTree{}
 			err = e.coinStore.PutPreCoinProof(
 				txn,
 				head.FrameNumber,
 				proofAddr,
 				add,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -501,11 +503,13 @@ func (e *DataClockConsensusEngine) handleMint(
 				return nil, errors.Wrap(err, "handle mint")
 			}
 			returnAddr = proofAddr
+			stateTree := &crypto.VectorCommitmentTree{}
 			err = e.coinStore.PutPreCoinProof(
 				txn,
 				head.FrameNumber,
 				proofAddr,
 				proof,
+				stateTree,
 			)
 			if err != nil {
 				txn.Abort()
@@ -551,10 +555,12 @@ func (e *DataClockConsensusEngine) handleMint(
 				txn.Abort()
 				return nil, errors.Wrap(err, "handle mint")
 			}
+			stateTree := &crypto.VectorCommitmentTree{}
 			e.coinStore.DeletePreCoinProof(
 				txn,
 				a,
 				deletes[0].GetDeletedProof(),
+				stateTree,
 			)
 		}
 		if err := txn.Commit(); err != nil {

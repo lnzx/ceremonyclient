@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"source.quilibrium.com/quilibrium/monorepo/nekryptology/pkg/vdf"
 	"source.quilibrium.com/quilibrium/monorepo/node/config"
+	"source.quilibrium.com/quilibrium/monorepo/node/crypto"
 	qcrypto "source.quilibrium.com/quilibrium/monorepo/node/crypto"
 	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token/application"
 	"source.quilibrium.com/quilibrium/monorepo/node/p2p"
@@ -503,6 +504,7 @@ func CreateGenesisState(
 	inclusionProver qcrypto.InclusionProver,
 	clockStore store.ClockStore,
 	coinStore store.CoinStore,
+	stateTree *crypto.VectorCommitmentTree,
 	network uint,
 ) (
 	[]byte,
@@ -863,6 +865,7 @@ func CreateGenesisState(
 				0,
 				address,
 				output.GetCoin(),
+				stateTree,
 			)
 			if err != nil {
 				panic(err)
@@ -886,6 +889,13 @@ func CreateGenesisState(
 			panic(err)
 		}
 
+		intrinsicFilter := p2p.GetBloomFilter(application.TOKEN_ADDRESS, 256, 3)
+		err = clockStore.SetDataStateTree(txn, intrinsicFilter, stateTree)
+		if err != nil {
+			txn.Abort()
+			panic(err)
+		}
+
 		if err = txn.Commit(); err != nil {
 			panic(err)
 		}
@@ -896,8 +906,6 @@ func CreateGenesisState(
 		if err != nil {
 			panic(err)
 		}
-
-		intrinsicFilter := p2p.GetBloomFilter(application.TOKEN_ADDRESS, 256, 3)
 
 		executionOutput := &protobufs.IntrinsicExecutionOutput{
 			Address: intrinsicFilter,
@@ -1004,11 +1012,19 @@ func CreateGenesisState(
 				0,
 				address,
 				output.GetCoin(),
+				stateTree,
 			)
 			if err != nil {
 				panic(err)
 			}
 		}
+		intrinsicFilter := p2p.GetBloomFilter(application.TOKEN_ADDRESS, 256, 3)
+		err = clockStore.SetDataStateTree(txn, intrinsicFilter, stateTree)
+		if err != nil {
+			txn.Abort()
+			panic(err)
+		}
+
 		if err := txn.Commit(); err != nil {
 			panic(err)
 		}
@@ -1019,8 +1035,6 @@ func CreateGenesisState(
 		if err != nil {
 			panic(err)
 		}
-
-		intrinsicFilter := p2p.GetBloomFilter(application.TOKEN_ADDRESS, 256, 3)
 
 		executionOutput := &protobufs.IntrinsicExecutionOutput{
 			Address: intrinsicFilter,

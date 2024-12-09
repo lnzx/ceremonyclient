@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"source.quilibrium.com/quilibrium/monorepo/node/config"
+	"source.quilibrium.com/quilibrium/monorepo/node/crypto"
 	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
 	"source.quilibrium.com/quilibrium/monorepo/node/tries"
 )
@@ -102,6 +103,12 @@ type ClockStore interface {
 		filter []byte,
 		minFrameNumber uint64,
 		maxFrameNumber uint64,
+	) error
+	GetDataStateTree(filter []byte) (*crypto.VectorCommitmentTree, error)
+	SetDataStateTree(
+		txn Transaction,
+		filter []byte,
+		tree *crypto.VectorCommitmentTree,
 	) error
 }
 
@@ -298,6 +305,7 @@ const CLOCK_DATA_FRAME_FRECENCY_DATA = 0x03
 const CLOCK_DATA_FRAME_DISTANCE_DATA = 0x04
 const CLOCK_COMPACTION_DATA = 0x05
 const CLOCK_DATA_FRAME_SENIORITY_DATA = 0x06
+const CLOCK_DATA_FRAME_STATE_TREE = 0x07
 const CLOCK_MASTER_FRAME_INDEX_EARLIEST = 0x10 | CLOCK_MASTER_FRAME_DATA
 const CLOCK_MASTER_FRAME_INDEX_LATEST = 0x20 | CLOCK_MASTER_FRAME_DATA
 const CLOCK_MASTER_FRAME_INDEX_PARENT = 0x30 | CLOCK_MASTER_FRAME_DATA
@@ -449,6 +457,14 @@ func clockDataSeniorityKey(
 	filter []byte,
 ) []byte {
 	key := []byte{CLOCK_FRAME, CLOCK_DATA_FRAME_SENIORITY_DATA}
+	key = append(key, filter...)
+	return key
+}
+
+func clockDataStateTreeKey(
+	filter []byte,
+) []byte {
+	key := []byte{CLOCK_FRAME, CLOCK_DATA_FRAME_STATE_TREE}
 	key = append(key, filter...)
 	return key
 }
@@ -1626,4 +1642,46 @@ func (p *PebbleClockStore) SetProverTriesForFrame(
 	}
 
 	return nil
+}
+
+func (p *PebbleClockStore) GetDataStateTree(filter []byte) (
+	*crypto.VectorCommitmentTree,
+	error,
+) {
+	data, closer, err := p.db.Get(clockDataStateTreeKey(filter))
+	if err != nil {
+		if errors.Is(err, pebble.ErrNotFound) {
+			return nil, ErrNotFound
+		}
+
+		return nil, errors.Wrap(err, "get data state tree")
+	}
+	defer closer.Close()
+	tree := &crypto.VectorCommitmentTree{}
+	var b bytes.Buffer
+	b.Write(data)
+	dec := gob.NewDecoder(&b)
+	if err = dec.Decode(tree); err != nil {
+		return nil, errors.Wrap(err, "get data state tree")
+	}
+
+	return tree, nil
+}
+
+func (p *PebbleClockStore) SetDataStateTree(
+	txn Transaction,
+	filter []byte,
+	tree *crypto.VectorCommitmentTree,
+) error {
+	b := new(bytes.Buffer)
+	enc := gob.NewEncoder(b)
+
+	if err := enc.Encode(tree); err != nil {
+		return errors.Wrap(err, "set data state tree")
+	}
+
+	return errors.Wrap(
+		txn.Set(clockDataStateTreeKey(filter), b.Bytes()),
+		"set data state tree",
+	)
 }

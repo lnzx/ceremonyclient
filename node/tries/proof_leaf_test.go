@@ -89,7 +89,7 @@ func TestPackAndVerifyOutput(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			tree, payload, output, err := tries.PackOutputIntoPayloadAndProof(
+			tree, output, err := tries.PackOutputIntoPayloadAndProof(
 				outputs,
 				tc.modulo,
 				frame,
@@ -97,7 +97,6 @@ func TestPackAndVerifyOutput(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NotNil(t, tree)
-			require.NotEmpty(t, payload)
 			require.NotEmpty(t, output)
 
 			var previousRoot []byte
@@ -115,23 +114,6 @@ func TestPackAndVerifyOutput(t *testing.T) {
 			require.Equal(t, tree.Root, treeRoot, "Tree root mismatch")
 			require.Equal(t, uint32(tc.modulo), modulo, "Modulo mismatch")
 			require.Equal(t, tc.frameNum, frameNumber, "Frame number mismatch")
-
-			reconstructedPayload := []byte("mint")
-			reconstructedPayload = append(reconstructedPayload, treeRoot...)
-			reconstructedPayload = binary.BigEndian.AppendUint32(reconstructedPayload, modulo)
-			reconstructedPayload = binary.BigEndian.AppendUint64(reconstructedPayload, frameNumber)
-
-			if tc.withPrev {
-				for i := 3; i < len(output)-2; i++ {
-					reconstructedPayload = append(reconstructedPayload, output[i]...)
-				}
-				pathBytes := output[len(output)-2]
-				reconstructedPayload = append(reconstructedPayload, pathBytes...)
-				leafBytes := output[len(output)-1]
-				reconstructedPayload = append(reconstructedPayload, leafBytes...)
-			}
-
-			require.Equal(t, payload, reconstructedPayload, "Payload reconstruction mismatch")
 
 			if tc.withPrev {
 				t.Run("corrupted_proof", func(t *testing.T) {
