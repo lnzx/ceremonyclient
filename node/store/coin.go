@@ -142,8 +142,8 @@ func (p *PebbleCoinStore) GetCoinsForOwner(
 		err = errors.Wrap(err, "get coins for owner")
 		return nil, nil, nil, err
 	}
-
 	defer iter.Close()
+
 	frameNumbers := []uint64{}
 	addresses := [][]byte{}
 	coins := []*protobufs.Coin{}
@@ -182,8 +182,8 @@ func (p *PebbleCoinStore) GetPreCoinProofsForOwner(owner []byte) (
 		err = errors.Wrap(err, "get pre coin proofs for owner")
 		return nil, nil, err
 	}
-
 	defer iter.Close()
+
 	frameNumbers := []uint64{}
 	proofs := []*protobufs.PreCoinProof{}
 	for iter.First(); iter.Valid(); iter.Next() {
@@ -221,7 +221,6 @@ func (p *PebbleCoinStore) GetCoinByAddress(txn Transaction, address []byte) (
 		err = errors.Wrap(err, "get coin by address")
 		return nil, err
 	}
-
 	defer closer.Close()
 
 	coin := &protobufs.Coin{}
@@ -246,7 +245,6 @@ func (p *PebbleCoinStore) GetPreCoinProofByAddress(address []byte) (
 		err = errors.Wrap(err, "get pre coin proof by address")
 		return nil, err
 	}
-
 	defer closer.Close()
 
 	proof := &protobufs.PreCoinProof{}
@@ -424,9 +422,9 @@ func (p *PebbleCoinStore) GetLatestFrameProcessed() (uint64, error) {
 
 		return 0, errors.Wrap(err, "get latest frame processed")
 	}
+	defer closer.Close()
 
 	frameNumber := binary.BigEndian.Uint64(v)
-	closer.Close()
 
 	return frameNumber, nil
 }
@@ -562,12 +560,11 @@ func (p *PebbleCoinStore) Migrate(filter []byte, genesisSeedHex string) error {
 		}
 		return p.internalMigrate(filter, seed)
 	}
+	defer closer.Close()
 
 	if !bytes.Equal(compare, seed) {
 		return p.internalMigrate(filter, seed)
 	}
-
-	closer.Close()
 
 	status, closer, err := p.db.Get(migrationKey())
 	if err != nil {
