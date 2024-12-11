@@ -20,8 +20,6 @@ import (
 	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
 )
 
-const defaultSyncTimeout = 4 * time.Second
-
 func (e *DataClockConsensusEngine) syncWithMesh() error {
 	e.logger.Info("collecting vdf proofs")
 
@@ -304,11 +302,12 @@ func (e *DataClockConsensusEngine) GetAheadPeers(frameNumber uint64) []internal.
 		}
 	}
 
+	syncCandidates := e.config.Engine.SyncCandidates
 	return slices.Concat(
-		internal.WeightedSampleWithoutReplacement(nearCandidates, len(nearCandidates)),
-		internal.WeightedSampleWithoutReplacement(reachableCandidates, len(reachableCandidates)),
-		internal.WeightedSampleWithoutReplacement(unknownCandidates, len(unknownCandidates)),
-		internal.WeightedSampleWithoutReplacement(unreachableCandidates, len(unreachableCandidates)),
+		internal.WeightedSampleWithoutReplacement(nearCandidates, min(len(nearCandidates), syncCandidates)),
+		internal.WeightedSampleWithoutReplacement(reachableCandidates, min(len(reachableCandidates), syncCandidates)),
+		internal.WeightedSampleWithoutReplacement(unknownCandidates, min(len(unknownCandidates), syncCandidates)),
+		internal.WeightedSampleWithoutReplacement(unreachableCandidates, min(len(unreachableCandidates), syncCandidates)),
 	)
 }
 
@@ -342,10 +341,6 @@ func (e *DataClockConsensusEngine) syncWithPeer(
 	}()
 
 	syncTimeout := e.config.Engine.SyncTimeout
-	if syncTimeout == 0 {
-		syncTimeout = defaultSyncTimeout
-	}
-
 	dialCtx, cancelDial := context.WithTimeout(e.ctx, syncTimeout)
 	defer cancelDial()
 	cc, err := e.pubSub.GetDirectChannel(dialCtx, peerId, "sync")
@@ -371,7 +366,10 @@ func (e *DataClockConsensusEngine) syncWithPeer(
 			&protobufs.GetDataFrameRequest{
 				FrameNumber: latest.FrameNumber + 1,
 			},
-			grpc.MaxCallRecvMsgSize(600*1024*1024),
+			// The message size limits are swapped because the server is the one
+			// sending the data.
+			grpc.MaxCallRecvMsgSize(e.config.Engine.SyncMessageLimits.MaxSendMsgSize),
+			grpc.MaxCallSendMsgSize(e.config.Engine.SyncMessageLimits.MaxRecvMsgSize),
 		)
 		cancelGet()
 		if err != nil {

@@ -144,6 +144,11 @@ var (
 		true,
 		"when enabled, frame execution validation is skipped",
 	)
+	compactDB = flag.Bool(
+		"compact-db",
+		false,
+		"compacts the database and exits",
+	)
 )
 
 func signatureCheckDefault() bool {
@@ -330,6 +335,17 @@ func main() {
 		panic(err)
 	}
 
+	if *compactDB && *core == 0 {
+		db := store.NewPebbleDB(nodeConfig.DB)
+		if err := db.CompactAll(); err != nil {
+			panic(err)
+		}
+		if err := db.Close(); err != nil {
+			panic(err)
+		}
+		return
+	}
+
 	if *network != 0 {
 		if nodeConfig.P2P.BootstrapPeers[0] == config.BootstrapPeers[0] {
 			fmt.Println(
@@ -384,15 +400,6 @@ func main() {
 		return
 	}
 
-	if nodeConfig.Engine.DataWorkerBaseListenMultiaddr == "" {
-		nodeConfig.Engine.DataWorkerBaseListenMultiaddr = "/ip4/127.0.0.1/tcp/%d"
-	}
-	if nodeConfig.Engine.DataWorkerBaseListenPort == 0 {
-		nodeConfig.Engine.DataWorkerBaseListenPort = 40000
-	}
-	if nodeConfig.Engine.DataWorkerMemoryLimit == 0 {
-		nodeConfig.Engine.DataWorkerMemoryLimit = 1792 * 1024 * 1024 // 1.75GiB
-	}
 	if len(nodeConfig.Engine.DataWorkerMultiaddrs) == 0 {
 		maxProcs, numCPU := runtime.GOMAXPROCS(0), runtime.NumCPU()
 		if maxProcs > numCPU && !nodeConfig.Engine.AllowExcessiveGOMAXPROCS {
@@ -460,6 +467,9 @@ func main() {
 			if _, explicitGOMEMLIMIT := os.LookupEnv("GOMEMLIMIT"); !explicitGOMEMLIMIT {
 				rdebug.SetMemoryLimit(availableOverhead * 8 / 10)
 			}
+			if _, explicitGOGC := os.LookupEnv("GOGC"); !explicitGOGC {
+				rdebug.SetGCPercent(10)
+			}
 		}
 	}
 
@@ -467,6 +477,7 @@ func main() {
 
 	if !*integrityCheck {
 		go spawnDataWorkers(nodeConfig)
+		defer stopDataWorkers()
 	}
 
 	kzg.Init()
@@ -510,6 +521,9 @@ func main() {
 
 	// runtime.GOMAXPROCS(1)
 
+	node.Start()
+	defer node.Stop()
+
 	if nodeConfig.ListenGRPCMultiaddr != "" {
 		srv, err := rpc.NewRPCServer(
 			nodeConfig.ListenGRPCMultiaddr,
@@ -526,20 +540,13 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-
-		go func() {
-			err := srv.Start()
-			if err != nil {
-				panic(err)
-			}
-		}()
+		if err := srv.Start(); err != nil {
+			panic(err)
+		}
+		defer srv.Stop()
 	}
 
-	node.Start()
-
 	<-done
-	stopDataWorkers()
-	node.Stop()
 }
 
 var dataWorkers []*exec.Cmd

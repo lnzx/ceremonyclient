@@ -2,6 +2,17 @@ package config
 
 import "time"
 
+const (
+	defaultMinimumPeersRequired          = 3
+	defaultDataWorkerBaseListenMultiaddr = "/ip4/127.0.0.1/tcp/%d"
+	defaultDataWorkerBaseListenPort      = 40000
+	defaultDataWorkerMemoryLimit         = 1792 * 1024 * 1024 // 1.75 GiB
+	defaultSyncTimeout                   = 4 * time.Second
+	defaultSyncCandidates                = 8
+	defaultSyncMessageReceiveLimit       = 1 * 1024 * 1024
+	defaultSyncMessageSendLimit          = 600 * 1024 * 1024
+)
+
 type FramePublishFragmentationReedSolomonConfig struct {
 	// The number of data shards to use for Reed-Solomon encoding and decoding.
 	DataShards int `yaml:"dataShards"`
@@ -9,7 +20,8 @@ type FramePublishFragmentationReedSolomonConfig struct {
 	ParityShards int `yaml:"parityShards"`
 }
 
-// WithDefaults sets default values for any fields that are not set.
+// WithDefaults returns a copy of the FramePublishFragmentationReedSolomonConfig with any missing fields set to
+// their default values.
 func (c FramePublishFragmentationReedSolomonConfig) WithDefaults() FramePublishFragmentationReedSolomonConfig {
 	cpy := c
 	if cpy.DataShards == 0 {
@@ -29,7 +41,8 @@ type FramePublishFragmentationConfig struct {
 	ReedSolomon FramePublishFragmentationReedSolomonConfig `yaml:"reedSolomon"`
 }
 
-// WithDefaults sets default values for any fields that are not set.
+// WithDefaults returns a copy of the FramePublishFragmentationConfig with any missing fields set to
+// their default values.
 func (c FramePublishFragmentationConfig) WithDefaults() FramePublishFragmentationConfig {
 	cpy := c
 	if cpy.Algorithm == "" {
@@ -53,7 +66,8 @@ type FramePublishConfig struct {
 	BallastSize int `yaml:"ballastSize"`
 }
 
-// WithDefaults sets default values for any fields that are not set.
+// WithDefaults returns a copy of the FramePublishConfig with any missing fields set to
+// their default values.
 func (c FramePublishConfig) WithDefaults() FramePublishConfig {
 	cpy := c
 	if cpy.Mode == "" {
@@ -94,6 +108,10 @@ type EngineConfig struct {
 	AutoMergeCoins bool `yaml:"autoMergeCoins"`
 	// Maximum wait time for a frame to be downloaded from a peer.
 	SyncTimeout time.Duration `yaml:"syncTimeout"`
+	// Number of candidate peers per category to sync with.
+	SyncCandidates int `yaml:"syncCandidates"`
+	// The configuration for the GRPC message limits.
+	SyncMessageLimits GRPCMessageLimitsConfig `yaml:"syncMessageLimits"`
 
 	// Values used only for testing – do not override these in production, your
 	// node will get kicked out
@@ -103,4 +121,34 @@ type EngineConfig struct {
 
 	// EXPERIMENTAL: The configuration for frame publishing.
 	FramePublish FramePublishConfig `yaml:"framePublish"`
+}
+
+// WithDefaults returns a copy of the EngineConfig with any missing fields set to
+// their default values.
+func (c EngineConfig) WithDefaults() EngineConfig {
+	cpy := c
+	if cpy.MinimumPeersRequired == 0 {
+		cpy.MinimumPeersRequired = defaultMinimumPeersRequired
+	}
+	if cpy.DataWorkerBaseListenMultiaddr == "" {
+		cpy.DataWorkerBaseListenMultiaddr = defaultDataWorkerBaseListenMultiaddr
+	}
+	if cpy.DataWorkerBaseListenPort == 0 {
+		cpy.DataWorkerBaseListenPort = defaultDataWorkerBaseListenPort
+	}
+	if cpy.DataWorkerMemoryLimit == 0 {
+		cpy.DataWorkerMemoryLimit = defaultDataWorkerMemoryLimit
+	}
+	if cpy.SyncTimeout == 0 {
+		cpy.SyncTimeout = defaultSyncTimeout
+	}
+	if cpy.SyncCandidates == 0 {
+		cpy.SyncCandidates = defaultSyncCandidates
+	}
+	cpy.SyncMessageLimits = cpy.SyncMessageLimits.WithDefaults(
+		defaultSyncMessageReceiveLimit,
+		defaultSyncMessageSendLimit,
+	)
+	cpy.FramePublish = cpy.FramePublish.WithDefaults()
+	return cpy
 }
