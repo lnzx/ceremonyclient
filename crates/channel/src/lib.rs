@@ -1,4 +1,5 @@
 use base64::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use ed448_goldilocks_plus::{elliptic_curve::group::GroupEncoding, EdwardsPoint, Scalar};
@@ -8,31 +9,31 @@ pub(crate) mod protocols;
 
 uniffi::include_scaffolding!("lib");
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct DoubleRatchetStateAndEnvelope {
     pub ratchet_state: String,
     pub envelope: String,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct DoubleRatchetStateAndMessage {
     pub ratchet_state: String,
     pub message: Vec<u8>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct TripleRatchetStateAndMetadata {
     pub ratchet_state: String,
     pub metadata: HashMap<String, String>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct TripleRatchetStateAndEnvelope {
     pub ratchet_state: String,
     pub envelope: String,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct TripleRatchetStateAndMessage {
     pub ratchet_state: String,
     pub message: Vec<u8>,
@@ -40,11 +41,11 @@ pub struct TripleRatchetStateAndMessage {
 
 pub fn new_double_ratchet(session_key: &Vec<u8>, sending_header_key: &Vec<u8>, next_receiving_header_key: &Vec<u8>, is_sender: bool, sending_ephemeral_private_key: &Vec<u8>, receiving_ephemeral_key: &Vec<u8>) -> String {
     if sending_ephemeral_private_key.len() != 56 {
-        return "".to_string();
+        return "invalid private key length".to_string();
     }
 
     if receiving_ephemeral_key.len() != 57 {
-        return "".to_string();
+        return "invalid public key length".to_string();
     }
 
     let mut sending_ephemeral_private_key_bytes = [0u8; 56];
@@ -56,7 +57,7 @@ pub fn new_double_ratchet(session_key: &Vec<u8>, sending_header_key: &Vec<u8>, n
     let sending_key = Scalar::from_bytes(&sending_ephemeral_private_key_bytes.into());
     let receiving_key = EdwardsPoint::from_bytes(&receiving_ephemeral_key_bytes.into()).into_option();
     if receiving_key.is_none() {
-        return "".to_string();
+        return "invalid receiving key".to_string();
     }
 
     let participant = DoubleRatchetParticipant::new(
@@ -69,12 +70,12 @@ pub fn new_double_ratchet(session_key: &Vec<u8>, sending_header_key: &Vec<u8>, n
     );
 
     if participant.is_err() {
-        return "".to_string();
+        return participant.unwrap_err().to_string();
     }
 
     let json = participant.unwrap().to_json();
     if json.is_err() {
-        return "".to_string();
+        return json.unwrap_err().to_string();
     }
 
     return json.unwrap();
@@ -86,7 +87,7 @@ pub fn double_ratchet_encrypt(ratchet_state_and_message: DoubleRatchetStateAndMe
 
     if participant.is_err() {
         return DoubleRatchetStateAndEnvelope{
-            ratchet_state: ratchet_state,
+            ratchet_state: participant.unwrap_err().to_string(),
             envelope: "".to_string(),
         };
     }
@@ -97,7 +98,7 @@ pub fn double_ratchet_encrypt(ratchet_state_and_message: DoubleRatchetStateAndMe
     if envelope.is_err() {
         return DoubleRatchetStateAndEnvelope{
             ratchet_state: ratchet_state,
-            envelope: "".to_string(),
+            envelope: envelope.unwrap_err().to_string(),
         };
     }
 
@@ -105,7 +106,7 @@ pub fn double_ratchet_encrypt(ratchet_state_and_message: DoubleRatchetStateAndMe
     let participant_json = dr.to_json();
     if participant_json.is_err() {
         return DoubleRatchetStateAndEnvelope{
-            ratchet_state: ratchet_state,
+            ratchet_state: participant_json.unwrap_err().to_string(),
             envelope: "".to_string(),
         };
     }
@@ -114,7 +115,7 @@ pub fn double_ratchet_encrypt(ratchet_state_and_message: DoubleRatchetStateAndMe
     if envelope_json.is_err() {
         return DoubleRatchetStateAndEnvelope{
             ratchet_state: ratchet_state,
-            envelope: "".to_string(),
+            envelope: envelope_json.unwrap_err().to_string(),
         };
     }
 
@@ -142,14 +143,14 @@ pub fn double_ratchet_decrypt(ratchet_state_and_envelope: DoubleRatchetStateAndE
     if message.is_err() {
         return DoubleRatchetStateAndMessage{
             ratchet_state: ratchet_state,
-            message: vec![],
+            message: message.unwrap_err().to_string().as_bytes().to_vec(),
         };
     }
 
     let participant_json = dr.to_json();
     if participant_json.is_err() {
         return DoubleRatchetStateAndMessage{
-            ratchet_state: ratchet_state,
+            ratchet_state: participant_json.unwrap_err().to_string(),
             message: vec![],
         };
     }
@@ -170,14 +171,14 @@ pub fn new_triple_ratchet(peers: &Vec<Vec<u8>>, peer_key: &Vec<u8>, identity_key
 
     if identity_key.len() != 56 {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "invalid idk".to_string(),
+            ratchet_state: "invalid identity key".to_string(),
             metadata: HashMap::new(),
         };
     }
 
     if signed_pre_key.len() != 56 {
         return TripleRatchetStateAndMetadata{
-            ratchet_state: "invalid spk".to_string(),
+            ratchet_state: "invalid signed pre key".to_string(),
             metadata: HashMap::new(),
         };
     }

@@ -15,6 +15,7 @@
 members = [
     "crates/vdf",
     "crates/channel",
+    "crates/channel-wasm",
     "crates/classgroup",
     "crates/bls48581",
     "crates/rpm",

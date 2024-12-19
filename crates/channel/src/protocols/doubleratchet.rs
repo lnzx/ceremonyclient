@@ -20,6 +20,7 @@ const CHAIN_KEY: u8 = 0x01;
 const MESSAGE_KEY: u8 = 0x02;
 const AEAD_KEY: u8 = 0x03;
 
+#[derive(Debug)]
 pub struct DoubleRatchetParticipant {
     sending_ephemeral_private_key: Scalar,
     receiving_ephemeral_key: EdwardsPoint,
