@@ -17,11 +17,11 @@ func GetMinimumPatchVersion() byte {
 }
 
 func GetMinimumVersion() []byte {
-	return []byte{0x02, 0x00, 0x05}
+	return []byte{0x02, 0x00, 0x06}
 }
 
 func GetVersion() []byte {
-	return []byte{0x02, 0x00, 0x05}
+	return []byte{0x02, 0x00, 0x06}
 }
 
 func GetVersionString() string {

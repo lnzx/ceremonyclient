@@ -1095,8 +1095,14 @@ func ProcessJoinsAndLeaves(
 			for _, t := range app.Tries[1:] {
 				nodes := t.FindNearestAndApproximateNeighbors(make([]byte, 32))
 				for _, n := range nodes {
-					if n.LatestFrame < frame.FrameNumber-1000 {
-						t.Remove(n.Key)
+					if frame.FrameNumber >= application.PROOF_FRAME_COMBINE_CUTOFF {
+						if n.LatestFrame < frame.FrameNumber-100 {
+							t.Remove(n.Key)
+						}
+					} else {
+						if n.LatestFrame < frame.FrameNumber-1000 {
+							t.Remove(n.Key)
+						}
 					}
 				}
 			}

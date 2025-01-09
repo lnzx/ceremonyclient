@@ -45,24 +45,7 @@ func (r *DataWorkerIPCServer) CalculateChallengeProof(
 
 	difficulty := req.Difficulty
 	frameNumber := req.FrameNumber
-	if req.ClockFrame != nil {
-		challenge = binary.BigEndian.AppendUint64(
-			challenge,
-			req.ClockFrame.FrameNumber,
-		)
-		challenge = binary.BigEndian.AppendUint32(challenge, req.Core)
-		challenge = append(challenge, req.ClockFrame.Output...)
-		difficulty = req.ClockFrame.Difficulty
-		frameNumber = req.ClockFrame.FrameNumber
-		r.logger.Debug(
-			"worker calculating challenge proof",
-			zap.String("peer_id", peer.ID(req.PeerId).String()),
-			zap.Uint32("core", req.Core),
-			zap.Uint64("frame_number", req.ClockFrame.FrameNumber),
-			zap.Uint32("difficulty", req.ClockFrame.Difficulty),
-			zap.Int("output_len", len(req.ClockFrame.Output)),
-		)
-	} else if req.Output != nil {
+	if req.Output != nil {
 		challenge = binary.BigEndian.AppendUint64(
 			challenge,
 			frameNumber,

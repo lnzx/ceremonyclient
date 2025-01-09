@@ -29,6 +29,7 @@ import (
 	qtime "source.quilibrium.com/quilibrium/monorepo/node/consensus/time"
 	qcrypto "source.quilibrium.com/quilibrium/monorepo/node/crypto"
 	"source.quilibrium.com/quilibrium/monorepo/node/execution"
+	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token/application"
 	"source.quilibrium.com/quilibrium/monorepo/node/internal/cas"
 	"source.quilibrium.com/quilibrium/monorepo/node/internal/frametime"
 	qgrpc "source.quilibrium.com/quilibrium/monorepo/node/internal/grpc"
@@ -581,6 +582,7 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 
 func (e *DataClockConsensusEngine) PerformTimeProof(
 	frame *protobufs.ClockFrame,
+	previousTreeRoot []byte,
 	difficulty uint32,
 	ring int,
 ) []mt.DataBlock {
@@ -613,6 +615,12 @@ func (e *DataClockConsensusEngine) PerformTimeProof(
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(actives))
+	challengeOutput := []byte{}
+	if frame.FrameNumber >= application.PROOF_FRAME_COMBINE_CUTOFF {
+		challengeOutput = append(append([]byte{}, frame.Output...), previousTreeRoot...)
+	} else {
+		challengeOutput = frame.Output
+	}
 
 	for i, client := range actives {
 		i := i
@@ -625,7 +633,7 @@ func (e *DataClockConsensusEngine) PerformTimeProof(
 					&protobufs.ChallengeProofRequest{
 						PeerId:      e.pubSub.GetPeerID(),
 						Core:        uint32(i),
-						Output:      frame.Output,
+						Output:      challengeOutput,
 						FrameNumber: frame.FrameNumber,
 						Difficulty:  frame.Difficulty,
 					},
