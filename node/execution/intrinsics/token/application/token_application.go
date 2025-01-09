@@ -213,7 +213,7 @@ func (a *TokenApplication) ApplyTransitions(
 					fails[i] = transition
 					continue
 				}
-				ring, parallelism, err := t.Mint.RingAndParallelism(
+				_, _, err := t.Mint.RingAndParallelism(
 					func(addr []byte) int {
 						if _, ok := seen[string(addr)]; ok {
 							return -1
@@ -233,7 +233,6 @@ func (a *TokenApplication) ApplyTransitions(
 				if err == nil {
 					// fmt.Println(i, "checked ring test")
 					set[i] = transition
-					parallelismMap[ring] = parallelismMap[ring] + uint64(parallelism)
 				} else {
 					// fmt.Println(i, "failed ring test", err)
 					fails[i] = transition
@@ -246,6 +245,7 @@ func (a *TokenApplication) ApplyTransitions(
 
 	outputsSet := make([][]*protobufs.TokenOutput, len(set))
 	successes := make([]*protobufs.TokenRequest, len(set))
+	processedMap := make([]*processedMint, len(set))
 	for i, transition := range set {
 		if transition == nil {
 			continue
@@ -397,10 +397,79 @@ func (a *TokenApplication) ApplyTransitions(
 			go func(i int, transition *protobufs.TokenRequest) {
 				defer func() { <-throttle }()
 				defer wg.Done()
+				var err error
+				processedMap[i], err = a.preProcessMint(
+					currentFrameNumber,
+					t.Mint,
+					frame,
+				)
+				if err != nil {
+					fails[i] = transition
+					return
+				}
+			}(i, transition)
+		}
+	}
+
+	wg.Wait()
+
+	for i, transition := range set {
+		if fails[i] != nil {
+			continue
+		}
+		switch t := transition.Request.(type) {
+		case *protobufs.TokenRequest_Mint:
+			if len(t.Mint.Proofs) == 1 {
+				continue
+			} else if len(t.Mint.Proofs) >= 3 && currentFrameNumber > PROOF_FRAME_CUTOFF {
+				if processedMap[i].validForReward {
+					ring, parallelism, err := t.Mint.RingAndParallelism(
+						func(addr []byte) int {
+							ring := -1
+							for i, t := range a.Tries[1:] {
+								if t.Contains(addr) {
+									ring = i
+									break
+								}
+							}
+
+							return ring
+						},
+					)
+					if err == nil {
+						parallelismMap[ring] = parallelismMap[ring] + uint64(parallelism)
+					} else {
+						// fmt.Println(i, "failed ring test", err)
+						fails[i] = transition
+					}
+				}
+			}
+		default:
+			set[i] = transition
+		}
+	}
+
+	for i, transition := range set {
+		if transition == nil {
+			continue
+		}
+
+		if fails[i] != nil {
+			continue
+		}
+
+		switch t := transition.Request.(type) {
+		case *protobufs.TokenRequest_Mint:
+			throttle <- struct{}{}
+			wg.Add(1)
+			go func(i int, transition *protobufs.TokenRequest) {
+				defer func() { <-throttle }()
+				defer wg.Done()
 				success, err := a.handleMint(
 					currentFrameNumber,
 					t.Mint,
 					frame,
+					processedMap[i],
 					parallelismMap,
 				)
 				if err != nil {
@@ -412,6 +481,7 @@ func (a *TokenApplication) ApplyTransitions(
 			}(i, transition)
 		}
 	}
+
 	wg.Wait()
 
 	finalFails := []*protobufs.TokenRequest{}
@@ -422,7 +492,7 @@ func (a *TokenApplication) ApplyTransitions(
 	}
 	if len(finalFails) != 0 && !skipFailures {
 		return nil, nil, nil, errors.Wrap(
-			err,
+			ErrInvalidStateTransition,
 			"apply transitions",
 		)
 	}
@@ -446,7 +516,6 @@ func (a *TokenApplication) ApplyTransitions(
 
 	finalizedTransitions.Requests = finalSuccesses
 	failedTransitions.Requests = finalFails
-
 	return a, finalizedTransitions, failedTransitions, nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	pcrypto "github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	mn "github.com/multiformats/go-multiaddr/net"
 	"github.com/pkg/errors"
@@ -44,22 +45,21 @@ func (r *DataWorkerIPCServer) CalculateChallengeProof(
 
 	difficulty := req.Difficulty
 	frameNumber := req.FrameNumber
-	if req.ClockFrame != nil {
-		challenge = binary.BigEndian.AppendUint64(
-			challenge,
-			req.ClockFrame.FrameNumber,
-		)
-		challenge = binary.BigEndian.AppendUint32(challenge, req.Core)
-		challenge = append(challenge, req.ClockFrame.Output...)
-		difficulty = req.ClockFrame.Difficulty
-		frameNumber = req.ClockFrame.FrameNumber
-	} else if req.Output != nil {
+	if req.Output != nil {
 		challenge = binary.BigEndian.AppendUint64(
 			challenge,
 			frameNumber,
 		)
 		challenge = binary.BigEndian.AppendUint32(challenge, req.Core)
 		challenge = append(challenge, req.Output...)
+		r.logger.Debug(
+			"worker calculating challenge proof",
+			zap.String("peer_id", peer.ID(req.PeerId).String()),
+			zap.Uint32("core", req.Core),
+			zap.Uint64("frame_number", req.FrameNumber),
+			zap.Uint32("difficulty", req.Difficulty),
+			zap.Int("output_len", len(req.Output)),
+		)
 	} else {
 		return nil, errors.Wrap(
 			errors.New("invalid request"),

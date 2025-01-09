@@ -60,6 +60,11 @@ func PackOutputIntoPayloadAndProof(
 	}
 
 	if previousTree != nil {
+		// don't let node produce invalid proofs that would otherwise fail
+		if len(previousTree.Proofs) != modulo {
+			return nil, nil, errors.Wrap(errors.New("invalid tree size"), "pack output into payload and proof")
+		}
+
 		hash := sha3.Sum256(frame.Output)
 		pick := BytesToUnbiasedMod(hash, uint64(modulo))
 		if uint64(modulo) < pick {
@@ -77,6 +82,85 @@ func PackOutputIntoPayloadAndProof(
 			),
 		)
 		output = append(output, previousTree.Leaves[int(pick)])
+	}
+	return tree, output, nil
+}
+
+func PackOutputIntoMultiPayloadAndProof(
+	outputs []mt.DataBlock,
+	modulo int,
+	frame *protobufs.ClockFrame,
+	previousTree *mt.MerkleTree,
+) (*mt.MerkleTree, [][]byte, error) {
+	if modulo != len(outputs) {
+		return nil, nil, errors.Wrap(
+			errors.New("mismatch of outputs and prover size"),
+			"pack output into payload and proof",
+		)
+	}
+	tree, err := mt.New(
+		&mt.Config{
+			HashFunc: func(data []byte) ([]byte, error) {
+				hash := sha3.Sum256(data)
+				return hash[:], nil
+			},
+			Mode:               mt.ModeProofGen,
+			DisableLeafHashing: true,
+		},
+		outputs,
+	)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "pack output into payload and proof")
+	}
+
+	output := [][]byte{
+		tree.Root,
+		binary.BigEndian.AppendUint32([]byte{}, uint32(modulo)),
+		binary.BigEndian.AppendUint64([]byte{}, frame.FrameNumber),
+	}
+
+	if previousTree != nil {
+		// don't let node produce invalid proofs that would otherwise fail
+		if len(previousTree.Proofs) != modulo {
+			return nil, nil, errors.Wrap(errors.New("invalid tree size"), "pack output into payload and proof")
+		}
+
+		hash := sha3.Sum256(append(append([]byte{}, frame.Output...), previousTree.Root...))
+		pick := BytesToUnbiasedMod(hash, uint64(modulo))
+		if uint64(modulo) < pick {
+			return nil, nil, errors.Wrap(
+				errors.New("proof size mismatch"),
+				"pack output into payload and proof",
+			)
+		}
+		output = append(output, previousTree.Proofs[int(pick)].Siblings...)
+		output = append(
+			output,
+			binary.BigEndian.AppendUint32(
+				[]byte{},
+				previousTree.Proofs[int(pick)].Path,
+			),
+		)
+		output = append(output, previousTree.Leaves[int(pick)])
+		additional := bits.Len64(uint64(modulo)-1) - 1
+		picks := []int{int(pick)}
+		for additional > 0 {
+			hash = sha3.Sum256(hash[:])
+			pick := BytesToUnbiasedMod(hash, uint64(modulo))
+			found := false
+			for _, p := range picks {
+				if p == int(pick) {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				picks = append(picks, int(pick))
+				output = append(output, previousTree.Leaves[int(pick)])
+				additional--
+			}
+		}
 	}
 	return tree, output, nil
 }
@@ -109,6 +193,64 @@ func UnpackAndVerifyOutput(
 		path := binary.BigEndian.Uint32(output[3+numSiblings])
 		leaf := output[len(output)-1]
 
+		verified, err = mt.Verify(
+			NewProofLeaf(leaf),
+			&mt.Proof{
+				Siblings: siblings,
+				Path:     path,
+			},
+			previousRoot,
+			&mt.Config{
+				HashFunc: func(data []byte) ([]byte, error) {
+					hash := sha3.Sum256(data)
+					return hash[:], nil
+				},
+				Mode:               mt.ModeProofGen,
+				DisableLeafHashing: true,
+			},
+		)
+		if err != nil {
+			return nil, 0, 0, false, errors.Wrap(err, "unpack and verify output")
+		}
+	} else {
+		verified = true
+	}
+
+	return treeRoot, modulo, frameNumber, verified, nil
+}
+
+func UnpackAndVerifyMultiOutput(
+	previousRoot []byte,
+	output [][]byte,
+) (treeRoot []byte, modulo uint32, frameNumber uint64, verified bool, err error) {
+	if len(output) < 3 {
+		return nil, 0, 0, false, errors.Wrap(
+			fmt.Errorf("output too short, expected at least 3 elements"),
+			"unpack and verify output",
+		)
+	}
+
+	treeRoot = output[0]
+	modulo = binary.BigEndian.Uint32(output[1])
+	frameNumber = binary.BigEndian.Uint64(output[2])
+
+	if len(output) > 3 {
+		numSiblings := bits.Len64(uint64(modulo) - 1)
+		additional := bits.Len64(uint64(modulo)-1) - 1
+		total := numSiblings
+		if additional > 0 {
+			total = numSiblings + additional
+		}
+		if len(output) != 5+total {
+			return nil, 0, 0, false, errors.Wrap(
+				fmt.Errorf("invalid number of proof elements"),
+				"unpack and verify output",
+			)
+		}
+
+		siblings := output[3 : 3+numSiblings]
+		path := binary.BigEndian.Uint32(output[3+numSiblings])
+		leaf := output[4+numSiblings]
 		verified, err = mt.Verify(
 			NewProofLeaf(leaf),
 			&mt.Proof{

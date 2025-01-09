@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/iden3/go-iden3-crypto/poseidon"
+	mt "github.com/txaty/go-merkletree"
 	"go.uber.org/zap"
 	"source.quilibrium.com/quilibrium/monorepo/node/consensus"
 	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token/application"
@@ -356,18 +357,33 @@ func (e *DataClockConsensusEngine) processFrame(
 					e.clientReconnectTest = 0
 				}
 
-				outputs := e.PerformTimeProof(latestFrame, latestFrame.Difficulty, ring)
+				previousTreeRoot := []byte{}
+				if e.previousTree != nil {
+					previousTreeRoot = e.previousTree.Root
+				}
+				outputs := e.PerformTimeProof(latestFrame, previousTreeRoot, latestFrame.Difficulty, ring)
 				if outputs == nil || len(outputs) < 3 {
 					e.logger.Info("workers not yet available for proving")
 					return latestFrame
 				}
 				modulo := len(outputs)
-				proofTree, output, err := tries.PackOutputIntoPayloadAndProof(
-					outputs,
-					modulo,
-					latestFrame,
-					e.previousTree,
-				)
+				var proofTree *mt.MerkleTree
+				var output [][]byte
+				if latestFrame.FrameNumber >= application.PROOF_FRAME_COMBINE_CUTOFF {
+					proofTree, output, err = tries.PackOutputIntoMultiPayloadAndProof(
+						outputs,
+						modulo,
+						latestFrame,
+						e.previousTree,
+					)
+				} else {
+					proofTree, output, err = tries.PackOutputIntoPayloadAndProof(
+						outputs,
+						modulo,
+						latestFrame,
+						e.previousTree,
+					)
+				}
 				if err != nil {
 					e.logger.Error(
 						"could not successfully pack proof, reattempting",

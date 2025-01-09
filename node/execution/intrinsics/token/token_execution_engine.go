@@ -1006,8 +1006,7 @@ func (e *TokenExecutionEngine) ProcessFrame(
 	e.peerSeniority = activeMap
 
 	if frame.FrameNumber == application.PROOF_FRAME_RING_RESET ||
-		frame.FrameNumber == application.PROOF_FRAME_RING_RESET_2 ||
-		frame.FrameNumber == application.PROOF_FRAME_RING_RESET_3 {
+		frame.FrameNumber == application.PROOF_FRAME_RING_RESET_2 {
 		e.logger.Info("performing ring reset")
 		seniorityMap, err := RebuildPeerSeniority(e.pubSub.GetNetwork())
 		if err != nil {
@@ -1058,7 +1057,7 @@ func (e *TokenExecutionEngine) performSeniorityMapRepair(
 	)
 
 	RebuildPeerSeniority(0)
-	for f := uint64(53028); f < frame.FrameNumber; f++ {
+	for f := uint64(application.PROOF_FRAME_RING_RESET_2); f < frame.FrameNumber; f++ {
 		frame, _, err := e.clockStore.GetDataClockFrame(e.intrinsicFilter, f, false)
 		if err != nil {
 			break
@@ -1170,8 +1169,14 @@ func ProcessJoinsAndLeaves(
 			for _, t := range app.Tries[1:] {
 				nodes := t.FindNearestAndApproximateNeighbors(make([]byte, 32))
 				for _, n := range nodes {
-					if n.LatestFrame < frame.FrameNumber-1000 {
-						t.Remove(n.Key)
+					if frame.FrameNumber >= application.PROOF_FRAME_COMBINE_CUTOFF {
+						if n.LatestFrame < frame.FrameNumber-100 {
+							t.Remove(n.Key)
+						}
+					} else {
+						if n.LatestFrame < frame.FrameNumber-1000 {
+							t.Remove(n.Key)
+						}
 					}
 				}
 			}
