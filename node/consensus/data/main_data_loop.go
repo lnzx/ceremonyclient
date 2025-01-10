@@ -233,7 +233,7 @@ func (e *DataClockConsensusEngine) processFrame(
 	latestFrame *protobufs.ClockFrame,
 	dataFrame *protobufs.ClockFrame,
 ) *protobufs.ClockFrame {
-	
+
 	e.logger.Info(
 		"current frame head",
 		zap.Uint64("frame_number", dataFrame.FrameNumber),

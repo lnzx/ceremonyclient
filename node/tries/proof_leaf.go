@@ -59,12 +59,7 @@ func PackOutputIntoPayloadAndProof(
 		binary.BigEndian.AppendUint64([]byte{}, frame.FrameNumber),
 	}
 
-	if previousTree != nil {
-		// don't let node produce invalid proofs that would otherwise fail
-		if len(previousTree.Proofs) != modulo {
-			return nil, nil, errors.Wrap(errors.New("invalid tree size"), "pack output into payload and proof")
-		}
-
+	if previousTree != nil && len(previousTree.Proofs) == modulo {
 		hash := sha3.Sum256(frame.Output)
 		pick := BytesToUnbiasedMod(hash, uint64(modulo))
 		if uint64(modulo) < pick {
@@ -119,12 +114,7 @@ func PackOutputIntoMultiPayloadAndProof(
 		binary.BigEndian.AppendUint64([]byte{}, frame.FrameNumber),
 	}
 
-	if previousTree != nil {
-		// don't let node produce invalid proofs that would otherwise fail
-		if len(previousTree.Proofs) != modulo {
-			return nil, nil, errors.Wrap(errors.New("invalid tree size"), "pack output into payload and proof")
-		}
-
+	if previousTree != nil && len(previousTree.Proofs) == modulo {
 		hash := sha3.Sum256(append(append([]byte{}, frame.Output...), previousTree.Root...))
 		pick := BytesToUnbiasedMod(hash, uint64(modulo))
 		if uint64(modulo) < pick {

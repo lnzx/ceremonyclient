@@ -298,3 +298,51 @@ func TestPackAndVerifyMultiOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestPackAndVerifyOutputFailover(t *testing.T) {
+	outputs := make([]mt.DataBlock, 3)
+	for i := range outputs {
+		data := make([]byte, 32)
+		binary.BigEndian.PutUint32(data, uint32(i))
+		outputs[i] = tries.NewProofLeaf(data)
+	}
+
+	frame := &protobufs.ClockFrame{
+		FrameNumber: 1,
+		Output:      make([]byte, 516),
+	}
+	rand.Read(frame.Output)
+
+	var previousTree *mt.MerkleTree
+	prevOutputs := make([]mt.DataBlock, 4)
+	for i := range prevOutputs {
+		data := make([]byte, 32)
+		binary.BigEndian.PutUint32(data, uint32(i))
+		prevOutputs[i] = tries.NewProofLeaf(data)
+	}
+
+	var err error
+	previousTree, err = mt.New(
+		&mt.Config{
+			HashFunc: func(data []byte) ([]byte, error) {
+				hash := sha3.Sum256(data)
+				return hash[:], nil
+			},
+			Mode:               mt.ModeProofGen,
+			DisableLeafHashing: true,
+		},
+		prevOutputs,
+	)
+	require.NoError(t, err)
+
+	tree, output, err := tries.PackOutputIntoMultiPayloadAndProof(
+		outputs,
+		3,
+		frame,
+		previousTree,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, tree)
+	require.NotEmpty(t, output)
+	require.Len(t, output, 3)
+}
