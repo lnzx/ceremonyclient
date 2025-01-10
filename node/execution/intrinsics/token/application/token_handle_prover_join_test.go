@@ -181,50 +181,28 @@ func (p *prover) generateProof(
 		challenge,
 		frame.FrameNumber,
 	)
-	individualChallenge := append([]byte{}, challenge...)
-	individualChallenge = binary.BigEndian.AppendUint32(
-		individualChallenge,
-		uint32(0),
-	)
-	individualChallenge = append(individualChallenge, frame.Output...)
-	if proofTree != nil {
-		individualChallenge = append(individualChallenge, proofTree.Root...)
-	}
-	out1, _ := wprover.CalculateChallengeProof(individualChallenge, 10000)
-	if breakWesoProof {
-		out1[4] ^= 0xff
-	}
-	individualChallenge = append([]byte{}, challenge...)
-	individualChallenge = binary.BigEndian.AppendUint32(
-		individualChallenge,
-		uint32(1),
-	)
-	individualChallenge = append(individualChallenge, frame.Output...)
-	if proofTree != nil {
-		individualChallenge = append(individualChallenge, proofTree.Root...)
-	}
-	out2, _ := wprover.CalculateChallengeProof(individualChallenge, 10000)
-	if breakWesoProof {
-		out2[4] ^= 0xff
-	}
+	outs := []merkletree.DataBlock{}
+	for i := 0; i < 64; i++ {
+		individualChallenge := append([]byte{}, challenge...)
+		individualChallenge = binary.BigEndian.AppendUint32(
+			individualChallenge,
+			uint32(i),
+		)
+		individualChallenge = append(individualChallenge, frame.Output...)
+		if proofTree != nil {
+			individualChallenge = append(individualChallenge, proofTree.Root...)
+		}
+		out, _ := wprover.CalculateChallengeProof(individualChallenge, 10000)
+		if breakWesoProof {
+			out[0] ^= 0xff
+		}
 
-	individualChallenge = append([]byte{}, challenge...)
-	individualChallenge = binary.BigEndian.AppendUint32(
-		individualChallenge,
-		uint32(2),
-	)
-	individualChallenge = append(individualChallenge, frame.Output...)
-	if proofTree != nil {
-		individualChallenge = append(individualChallenge, proofTree.Root...)
-	}
-	out3, _ := wprover.CalculateChallengeProof(individualChallenge, 10000)
-	if breakWesoProof {
-		out3[4] ^= 0xff
+		outs = append(outs, tries.NewProofLeaf(out))
 	}
 
 	proofTree, output, _ := tries.PackOutputIntoMultiPayloadAndProof(
-		[]merkletree.DataBlock{tries.NewProofLeaf(out1), tries.NewProofLeaf(out2), tries.NewProofLeaf(out3)},
-		3,
+		outs,
+		len(outs),
 		frame,
 		proofTree,
 	)
@@ -237,7 +215,7 @@ func (p *prover) generateProof(
 	}
 	mint.SignED448([]byte(p.pubKey), p.privKey.Sign)
 
-	return proofTree, [][]byte{out1, out2}, &protobufs.TokenRequest{
+	return proofTree, [][]byte{}, &protobufs.TokenRequest{
 		Request: &protobufs.TokenRequest_Mint{
 			Mint: mint,
 		},
