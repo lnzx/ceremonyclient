@@ -227,6 +227,12 @@ func (e *DataClockConsensusEngine) handleClockFrame(
 		return nil
 	}
 
+	if _, ok := e.recentlyProcessedFrames.Peek(string(frame.Output)); ok {
+		return nil
+	}
+
+	e.recentlyProcessedFrames.Add(string(frame.Output), struct{}{})
+
 	e.logger.Debug(
 		"got clock frame",
 		zap.Binary("address", address),
