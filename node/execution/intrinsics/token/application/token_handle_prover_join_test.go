@@ -109,7 +109,7 @@ func (p *prover) generateTransfer(coin []byte) *protobufs.TokenRequest {
 func (p *prover) generateSplit(addr []byte) *protobufs.TokenRequest {
 	payload := []byte("split")
 	payload = append(payload, addr...)
-	bi1, _ := new(big.Int).SetString("2047999999999", 10)
+	bi1, _ := new(big.Int).SetString("2048000000000", 10)
 	bi2, _ := new(big.Int).SetString("2048000000000", 10)
 	payload = append(payload, bi1.FillBytes(make([]byte, 32))...)
 	payload = append(payload, bi2.FillBytes(make([]byte, 32))...)
@@ -174,6 +174,7 @@ func (p *prover) generateProof(
 	proofTree *merkletree.MerkleTree,
 	breakWesoProof bool,
 	breakTreeProof bool,
+	treeRecovery bool,
 ) (*merkletree.MerkleTree, [][]byte, *protobufs.TokenRequest) {
 	challenge := []byte{}
 	challenge = append(challenge, []byte(p.peerId)...)
@@ -181,50 +182,32 @@ func (p *prover) generateProof(
 		challenge,
 		frame.FrameNumber,
 	)
-	individualChallenge := append([]byte{}, challenge...)
-	individualChallenge = binary.BigEndian.AppendUint32(
-		individualChallenge,
-		uint32(0),
-	)
-	individualChallenge = append(individualChallenge, frame.Output...)
-	if proofTree != nil {
-		individualChallenge = append(individualChallenge, proofTree.Root...)
+	outs := []merkletree.DataBlock{}
+	target := 8
+	if treeRecovery {
+		target = 4
 	}
-	out1, _ := wprover.CalculateChallengeProof(individualChallenge, 10000)
-	if breakWesoProof {
-		out1[4] ^= 0xff
-	}
-	individualChallenge = append([]byte{}, challenge...)
-	individualChallenge = binary.BigEndian.AppendUint32(
-		individualChallenge,
-		uint32(1),
-	)
-	individualChallenge = append(individualChallenge, frame.Output...)
-	if proofTree != nil {
-		individualChallenge = append(individualChallenge, proofTree.Root...)
-	}
-	out2, _ := wprover.CalculateChallengeProof(individualChallenge, 10000)
-	if breakWesoProof {
-		out2[4] ^= 0xff
-	}
+	for i := 0; i < target; i++ {
+		individualChallenge := append([]byte{}, challenge...)
+		individualChallenge = binary.BigEndian.AppendUint32(
+			individualChallenge,
+			uint32(i),
+		)
+		individualChallenge = append(individualChallenge, frame.Output...)
+		if proofTree != nil {
+			individualChallenge = append(individualChallenge, proofTree.Root...)
+		}
+		out, _ := wprover.CalculateChallengeProof(individualChallenge, 10000)
+		if breakWesoProof {
+			out[0] ^= 0xff
+		}
 
-	individualChallenge = append([]byte{}, challenge...)
-	individualChallenge = binary.BigEndian.AppendUint32(
-		individualChallenge,
-		uint32(2),
-	)
-	individualChallenge = append(individualChallenge, frame.Output...)
-	if proofTree != nil {
-		individualChallenge = append(individualChallenge, proofTree.Root...)
-	}
-	out3, _ := wprover.CalculateChallengeProof(individualChallenge, 10000)
-	if breakWesoProof {
-		out3[4] ^= 0xff
+		outs = append(outs, tries.NewProofLeaf(out))
 	}
 
 	proofTree, output, _ := tries.PackOutputIntoMultiPayloadAndProof(
-		[]merkletree.DataBlock{tries.NewProofLeaf(out1), tries.NewProofLeaf(out2), tries.NewProofLeaf(out3)},
-		3,
+		outs,
+		len(outs),
 		frame,
 		proofTree,
 	)
@@ -237,7 +220,7 @@ func (p *prover) generateProof(
 	}
 	mint.SignED448([]byte(p.pubKey), p.privKey.Sign)
 
-	return proofTree, [][]byte{out1, out2}, &protobufs.TokenRequest{
+	return proofTree, [][]byte{}, &protobufs.TokenRequest{
 		Request: &protobufs.TokenRequest_Mint{
 			Mint: mint,
 		},
@@ -336,7 +319,7 @@ func TestHandleProverJoin(t *testing.T) {
 	proofTrees := []*merkletree.MerkleTree{}
 	reqs := []*protobufs.TokenRequest{}
 	for _, prover := range provers {
-		proofTree, _, req := prover.generateProof(frame2, wprover, nil, false, false)
+		proofTree, _, req := prover.generateProof(frame2, wprover, nil, false, false, false)
 		proofTrees = append(proofTrees, proofTree)
 		reqs = append(reqs, req)
 	}
@@ -386,7 +369,7 @@ func TestHandleProverJoin(t *testing.T) {
 	txn.Commit()
 
 	for i, prover := range provers {
-		proofTree, _, req := prover.generateProof(frame3, wprover, proofTrees[i], false, false)
+		proofTree, _, req := prover.generateProof(frame3, wprover, proofTrees[i], false, false, true)
 		proofTrees[i] = proofTree
 		reqs[i] = req
 	}
@@ -430,7 +413,7 @@ func TestHandleProverJoin(t *testing.T) {
 	err = txn.Commit()
 	assert.NoError(t, err)
 	assert.Len(t, success.Requests, 1)
-	assert.Len(t, app.TokenOutputs.Outputs, 3)
+	assert.Len(t, app.TokenOutputs.Outputs, 2)
 
 	txn, _ = app.ClockStore.NewTransaction(false)
 	frame4, _ := wprover.ProveDataClockFrame(frame3, [][]byte{}, []*protobufs.InclusionAggregateProof{}, bprivKey, time.Now().UnixMilli(), 10000)
@@ -440,7 +423,7 @@ func TestHandleProverJoin(t *testing.T) {
 	txn.Commit()
 
 	for i, prover := range provers {
-		proofTree, _, req := prover.generateProof(frame4, wprover, proofTrees[i], false, false)
+		proofTree, _, req := prover.generateProof(frame4, wprover, proofTrees[i], false, false, true)
 		proofTrees[i] = proofTree
 		reqs[i] = req
 	}

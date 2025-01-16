@@ -253,6 +253,8 @@ func (e *DataClockConsensusEngine) handleClockFrame(
 	}
 
 	if frame.FrameNumber > head.FrameNumber {
+		go e.initiateProvers(frame)
+
 		if _, err := e.dataTimeReel.Insert(e.ctx, frame); err != nil {
 			e.logger.Debug("could not insert frame", zap.Error(err))
 		}
