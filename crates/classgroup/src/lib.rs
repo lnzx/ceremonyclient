@@ -177,8 +177,8 @@ mod test {
         path::PathBuf,
     };
 
-    use super::{gmp_classgroup::GmpClassGroup, ClassGroup};
     use super::gmp::mpz::Mpz;
+    use super::{gmp_classgroup::GmpClassGroup, ClassGroup};
 
     fn split_into_three_pieces(line: &str, c: char) -> [&str; 3] {
         let mut iter = line.split(c);
@@ -193,6 +193,7 @@ mod test {
     fn multiplication_is_correct() {
         let manifest_path =
             std::env::var("CARGO_MANIFEST_DIR").expect("cargo should have set this");
+        dbg!(&manifest_path);
         let mut path = PathBuf::from(&manifest_path);
         path.push("tests/multiply.txt");
         let mut f = BufReader::new(File::open(path).expect("test file missing or unreadable"));
@@ -247,5 +248,4 @@ mod test {
             buffer.clear();
         }
     }
-
 }
