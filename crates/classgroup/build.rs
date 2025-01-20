@@ -35,10 +35,19 @@ fn main() {
         .flag("-lflint")
         .flag("-lmpfr")
         .compile("vdf");
+    } else if target == "aarch64-unknown-linux-gnu" {
+      cc::Build::new()
+        .cpp(true)
+        .file("src/vdf.cpp")
+        .static_flag(true)
+        .flag("-lflint")
+        .flag("-lmpfr")
+        .compile("vdf");
     } else if target == "x86_64-unknown-linux-gnu" {
       cc::Build::new()
         .cpp(true)
         .file("src/vdf.cpp")
+        .static_flag(true)
         .flag("-lflint")
         .flag("-lmpfr")
         .compile("vdf");

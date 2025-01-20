@@ -1,11 +1,25 @@
-FROM golang:1.22.4-bullseye as build-base
+FROM ubuntu:24.04 as build-base
 
 ENV PATH="${PATH}:/root/.cargo/bin/"
 
 # Install GMP 6.2 (6.3 which MacOS is using only available on Debian unstable)
 RUN apt-get update && apt-get install -y \
-  libgmp-dev libflint-dev \
+  libgmp-dev libflint-dev g++ \
   && rm -rf /var/lib/apt/lists/* 
+
+RUN apt update && apt install -y wget && \
+    ARCH=$(dpkg --print-architecture) && \
+    case ${ARCH} in \
+        amd64) GOARCH=amd64 ;; \
+        arm64) GOARCH=arm64 ;; \
+        *) echo "Unsupported architecture: ${ARCH}" && exit 1 ;; \
+    esac && \
+    wget https://go.dev/dl/go1.22.0.linux-${GOARCH}.tar.gz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf go1.22.0.linux-${GOARCH}.tar.gz && \
+    rm go1.22.0.linux-${GOARCH}.tar.gz
+
+ENV PATH=$PATH:/usr/local/go/bin
 
 COPY docker/rustup-init.sh /opt/rustup-init.sh
 
@@ -34,25 +48,27 @@ RUN ./generate.sh
 # Build and install the node
 WORKDIR /opt/ceremonyclient/node
 
-RUN ./build.sh && cp node /go/bin
+RUN ./build.sh && cp node /usr/bin
 RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
 # Build and install qclient
 WORKDIR /opt/ceremonyclient/client
 
-RUN ./build.sh -o qclient && cp qclient /go/bin
+RUN ./build.sh -o qclient && cp qclient /usr/bin
 
 # Allows exporting single binary
 FROM scratch as qclient
-COPY --from=build /go/bin/qclient /qclient
+COPY --from=build /usr/bin/qclient /qclient
 ENTRYPOINT [ "/qclient" ]
 
 # Allows exporting single binary
 FROM scratch AS node
-COPY --from=build /go/bin/node /node
+COPY --from=build /usr/bin/node /node
 ENTRYPOINT [ "/node" ]
 
-FROM debian:bullseye
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install libflint-dev -y
 
 ARG NODE_VERSION
 ARG GIT_REPO
@@ -73,8 +89,8 @@ LABEL org.opencontainers.image.revision=$GIT_COMMIT
 
 RUN apt-get update && apt-get install -y ca-certificates
 
-COPY --from=build /go/bin/node /usr/local/bin
-COPY --from=build /go/bin/grpcurl /usr/local/bin
+COPY --from=build /usr/bin/node /usr/local/bin
+COPY --from=build /usr/local/go/bin/grpcurl /usr/local/bin
 COPY --from=build /opt/ceremonyclient/client/qclient /usr/local/bin
 
 WORKDIR /root
