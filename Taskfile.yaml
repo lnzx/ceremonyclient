@@ -60,6 +60,11 @@ tasks:
     cmds:
       - docker build --platform linux/amd64 -f Dockerfile.source --output node/build/amd64_linux --target=node .
 
+  build_node_amd64_avx512_linux:
+    desc: Build the Quilibrium node binary for AMD64 Linux with AVX-512 extensions. Outputs to node/build.
+    cmds:
+      - docker build --platform linux/amd64 -f Dockerfile.sourceavx512 --output node/build/amd64_avx512_linux --target=node .
+
   build_qclient_amd64_linux:
     desc: Build the QClient node binary for AMD64 Linux. Outputs to node/build.
     cmds:
