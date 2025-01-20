@@ -73,6 +73,10 @@ extern "C" {
         mpz_set(f.a, f_.a);
         mpz_set(f.b, f_.b);
         mpz_set(f.c, f_.c);
+
+		// Clear all allocated GMP variables
+		mpz_clears(f_.a, f_.b, f_.c, NULL);
+		mpz_clears(mu, a2, denom, NULL);
     }
 
     inline uint64_t signed_shift(uint64_t op, int shift) {
@@ -118,96 +122,118 @@ extern "C" {
     }
 
     // This is based on Akashnil's integer approximation reduce
-    inline void fast_reduce(form& f) {
+// This is based on Akashnil's integer approximation reduce
+	inline void fast_reduce(form& f) {
+		int64_t u, v, w, x, u_, v_, w_, x_;
+		int64_t delta, gamma, sgn;
+		int64_t a, b, c, a_, b_, c_;
+		int64_t aa, ab, ac, ba, bb, bc, ca, cb, cc;
+		long int a_exp, b_exp, c_exp, max_exp, min_exp;
+		mpz_t faa, fab, fac, fba, fbb, fbc, fca, fcb, fcc, a2, mu;
 
-        int64_t u, v, w, x, u_, v_, w_, x_;
-        int64_t delta, gamma, sgn;
-        int64_t a, b, c, a_, b_, c_;
-        int64_t aa, ab, ac, ba, bb, bc, ca, cb, cc;
-        long int a_exp, b_exp, c_exp, max_exp, min_exp;
-            mpz_t faa, fab, fac, fba, fbb, fbc, fca, fcb, fcc, a2, mu;
-            mpz_inits(faa, fab, fac, fba, fbb, fbc, fca, fcb, fcc, a2, mu, NULL);
+		// Initialize all temporary variables
+		mpz_inits(faa, fab, fac, fba, fbb, fbc, fca, fcb, fcc, a2, mu, NULL);
 
-        while (!test_reduction(f)) {
+		while (!test_reduction(f)) {
+			a = mpz_get_si_2exp(&a_exp, f.a);
+			b = mpz_get_si_2exp(&b_exp, f.b);
+			c = mpz_get_si_2exp(&c_exp, f.c);
 
-            a = mpz_get_si_2exp(&a_exp, f.a);
-            b = mpz_get_si_2exp(&b_exp, f.b);
-            c = mpz_get_si_2exp(&c_exp, f.c);
+			max_exp = a_exp;
+			min_exp = a_exp;
 
-            max_exp = a_exp;
-            min_exp = a_exp;
+			if (max_exp < b_exp) max_exp = b_exp;
+			if (min_exp > b_exp) min_exp = b_exp;
 
-            if (max_exp < b_exp) max_exp = b_exp;
-            if (min_exp > b_exp) min_exp = b_exp;
+			if (max_exp < c_exp) max_exp = c_exp;
+			if (min_exp > c_exp) min_exp = c_exp;
 
-            if (max_exp < c_exp) max_exp = c_exp;
-            if (min_exp > c_exp) min_exp = c_exp;
+			if (max_exp - min_exp > EXP_THRESH) {
+				normalize(f);
+				continue;
+			}
+			max_exp++; // for safety vs overflow
 
-            if (max_exp - min_exp > EXP_THRESH) {
-                normalize(f); continue;
-            }
-            max_exp++; // for safety vs overflow
+			// Ensure a, b, c are shifted so that a : b : c ratios are same as f.a : f.b : f.c
+			// a, b, c will be used as approximations to f.a, f.b, f.c
+			a >>= (max_exp - a_exp);
+			b >>= (max_exp - b_exp);
+			c >>= (max_exp - c_exp);
 
-            // Ensure a, b, c are shifted so that a : b : c ratios are same as f.a : f.b : f.c
-            // a, b, c will be used as approximations to f.a, f.b, f.c
-            a >>= (max_exp - a_exp);
-            b >>= (max_exp - b_exp);
-            c >>= (max_exp - c_exp);
+			u_ = 1;
+			v_ = 0;
+			w_ = 0;
+			x_ = 1;
 
-            u_ = 1; v_ = 0; w_ = 0; x_ = 1;
+			// Perform iterative reductions
+			do {
+				u = u_;
+				v = v_;
+				w = w_;
+				x = x_;
 
-            // We must be very careful about overflow in the following steps
-            do {
-                u = u_; v = v_; w = w_; x = x_;
-                // Ensure that delta = floor ((b+c) / 2c)
-                delta = b >= 0 ? (b+c) / (c<<1) : - (-b+c) / (c<<1);
-                a_ = c;
-                c_ = c * delta;
-                b_ = -b + (c_ << 1);
-                gamma = b - c_;
-                c_ = a - delta * gamma;
+				// Compute delta = floor((b + c) / (2 * c))
+				delta = (b >= 0) ? (b + c) / (c << 1) : -(-b + c) / (c << 1);
 
-                a = a_; b = b_; c = c_;
+				a_ = c;
+				c_ = c * delta;
+				b_ = -b + (c_ << 1);
+				gamma = b - c_;
+				c_ = a - delta * gamma;
 
-                u_ = v;
-                v_ = -u + delta * v;
-                w_ = x;
-                x_ = -w + delta * x;
-            // The condition (abs(v_) | abs(x_)) <= THRESH protects against overflow
-            } while ((abs(v_) | abs(x_)) <= THRESH && a > c && c > 0);
+				a = a_;
+				b = b_;
+				c = c_;
 
-            if ((abs(v_) | abs(x_)) <= THRESH) {
-                u = u_; v = v_; w = w_; x = x_;
-            }
+				u_ = v;
+				v_ = -u + delta * v;
+				w_ = x;
+				x_ = -w + delta * x;
+			} while ((abs(v_) | abs(x_)) <= THRESH && a > c && c > 0);
 
-            aa = u * u; ab = u * w; ac = w * w;
-            ba = u * v << 1; bb = u * x + v * w; bc = w * x << 1;
-            ca = v * v; cb = v * x; cc = x * x;
+			if ((abs(v_) | abs(x_)) <= THRESH) {
+				u = u_;
+				v = v_;
+				w = w_;
+				x = x_;
+			}
 
-            // The following operations take 40% of the overall runtime.
+			aa = u * u;
+			ab = u * w;
+			ac = w * w;
+			ba = u * v << 1;
+			bb = u * x + v * w;
+			bc = w * x << 1;
+			ca = v * v;
+			cb = v * x;
+			cc = x * x;
 
-            mpz_mul_si(faa, f.a, aa);
-            mpz_mul_si(fab, f.b, ab);
-            mpz_mul_si(fac, f.c, ac);
+			// Perform GMP multiplications and additions
+			mpz_mul_si(faa, f.a, aa);
+			mpz_mul_si(fab, f.b, ab);
+			mpz_mul_si(fac, f.c, ac);
 
-            mpz_mul_si(fba, f.a, ba);
-            mpz_mul_si(fbb, f.b, bb);
-            mpz_mul_si(fbc, f.c, bc);
+			mpz_mul_si(fba, f.a, ba);
+			mpz_mul_si(fbb, f.b, bb);
+			mpz_mul_si(fbc, f.c, bc);
 
-            mpz_mul_si(fca, f.a, ca);
-            mpz_mul_si(fcb, f.b, cb);
-            mpz_mul_si(fcc, f.c, cc);
+			mpz_mul_si(fca, f.a, ca);
+			mpz_mul_si(fcb, f.b, cb);
+			mpz_mul_si(fcc, f.c, cc);
 
-            mpz_add(f.a, faa, fab);
-            mpz_add(f.a, f.a, fac);
+			mpz_add(f.a, faa, fab);
+			mpz_add(f.a, f.a, fac);
 
-            mpz_add(f.b, fba, fbb);
-            mpz_add(f.b, f.b, fbc);
+			mpz_add(f.b, fba, fbb);
+			mpz_add(f.b, f.b, fbc);
 
-            mpz_add(f.c, fca, fcb);
-            mpz_add(f.c, f.c, fcc);
-        }
-    }
+			mpz_add(f.c, fca, fcb);
+			mpz_add(f.c, f.c, fcc);
+		}
+
+		// Clear all initialized GMP variables to avoid memory leaks
+		mpz_clears(faa, fab, fac, fba, fbb, fbc, fca, fcb, fcc, a2, mu, NULL);
+	}
 
     // https://www.researchgate.net/publication/221451638_Computational_aspects_of_NUCOMP
     //based on the implementation from Bulaiden
