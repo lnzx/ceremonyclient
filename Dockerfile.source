@@ -4,7 +4,7 @@ ENV PATH="${PATH}:/root/.cargo/bin/"
 
 # Install GMP 6.2 (6.3 which MacOS is using only available on Debian unstable)
 RUN apt-get update && apt-get install -y \
-  libgmp-dev \
+  libgmp-dev libflint-dev \
   && rm -rf /var/lib/apt/lists/* 
 
 COPY docker/rustup-init.sh /opt/rustup-init.sh
