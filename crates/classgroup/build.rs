@@ -12,7 +12,6 @@ fn main() {
     let target = env::var("TARGET").expect("cargo should have set this");
     if target == "aarch64-apple-darwin" {
         println!("cargo:rustc-link-search=/opt/homebrew/Cellar/gmp/6.3.0/lib");
-        println!("cargo:rustc-link-search=/opt/homebrew/Cellar/flint/3.1.3-p1/lib");
         println!("cargo:rustc-link-search=/opt/homebrew/Cellar/mpfr/4.2.1/lib");
     } else if target == "aarch64-unknown-linux-gnu" {
         println!("cargo:rustc-link-search=/usr/lib/aarch64-linux-gnu/");
@@ -25,11 +24,10 @@ fn main() {
       cc::Build::new()
         .cpp(true)
         .file("src/vdf.cpp")
+        .static_flag(true)
         .flag("-I/opt/homebrew/Cellar/gmp/6.3.0/include")
-        .flag("-I/opt/homebrew/Cellar/flint/3.1.3-p1/include")
         .flag("-I/opt/homebrew/Cellar/mpfr/4.2.1/include")
         .flag("-L/opt/homebrew/Cellar/gmp/6.3.0/lib")
-        .flag("-L/opt/homebrew/Cellar/flint/3.1.3-p1/lib")
         .flag("-L/opt/homebrew/Cellar/mpfr/4.2.1/lib")
         .flag("-lgmp")
         .flag("-lflint")
