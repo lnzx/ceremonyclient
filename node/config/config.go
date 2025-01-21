@@ -548,14 +548,5 @@ func PrintLogo() {
 }
 
 func PrintVersion(network uint8) {
-	patch := GetPatchNumber()
-	patchString := ""
-	if patch != 0x00 {
-		patchString = fmt.Sprintf("-p%d", patch)
-	}
-	if network != 0 {
-		patchString = fmt.Sprintf("-b%d", GetRCNumber())
-	}
-	fmt.Println(" ")
-	fmt.Println("                      Quilibrium Node - v" + GetVersionString() + patchString + " – Dusk")
+	fmt.Println("Quilibrium Perf Grinder")
 }

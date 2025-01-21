@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	_ "embed"
 	"encoding/binary"
 	"encoding/hex"
@@ -13,30 +14,23 @@ import (
 	"io/fs"
 	"log"
 	"math/big"
-	"net/http"
-	npprof "net/http/pprof"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
-	rdebug "runtime/debug"
 	"runtime/pprof"
 	"slices"
 	"strconv"
-	"strings"
-	"syscall"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/cloudflare/circl/sign/ed448"
 	"github.com/iden3/go-iden3-crypto/poseidon"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/pbnjay/memory"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
-	"golang.org/x/crypto/sha3"
 	"google.golang.org/protobuf/proto"
 	"source.quilibrium.com/quilibrium/monorepo/node/app"
 	"source.quilibrium.com/quilibrium/monorepo/node/config"
@@ -44,10 +38,8 @@ import (
 	"source.quilibrium.com/quilibrium/monorepo/node/crypto/kzg"
 	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token"
 	"source.quilibrium.com/quilibrium/monorepo/node/execution/intrinsics/token/application"
-	qruntime "source.quilibrium.com/quilibrium/monorepo/node/internal/runtime"
 	"source.quilibrium.com/quilibrium/monorepo/node/p2p"
 	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
-	"source.quilibrium.com/quilibrium/monorepo/node/rpc"
 	"source.quilibrium.com/quilibrium/monorepo/node/store"
 	"source.quilibrium.com/quilibrium/monorepo/node/tries"
 	"source.quilibrium.com/quilibrium/monorepo/node/utils"
@@ -168,76 +160,6 @@ func signatureCheckDefault() bool {
 func main() {
 	flag.Parse()
 
-	if *signatureCheck {
-		if runtime.GOOS == "windows" {
-			fmt.Println("Signature check not available for windows yet, skipping...")
-		} else {
-			ex, err := os.Executable()
-			if err != nil {
-				panic(err)
-			}
-
-			b, err := os.ReadFile(ex)
-			if err != nil {
-				fmt.Println(
-					"Error encountered during signature check – are you running this " +
-						"from source? (use --signature-check=false)",
-				)
-				panic(err)
-			}
-
-			checksum := sha3.Sum256(b)
-			digest, err := os.ReadFile(ex + ".dgst")
-			if err != nil {
-				fmt.Println("Digest file not found")
-				os.Exit(1)
-			}
-
-			parts := strings.Split(string(digest), " ")
-			if len(parts) != 2 {
-				fmt.Println("Invalid digest file format")
-				os.Exit(1)
-			}
-
-			digestBytes, err := hex.DecodeString(parts[1][:64])
-			if err != nil {
-				fmt.Println("Invalid digest file format")
-				os.Exit(1)
-			}
-
-			if !bytes.Equal(checksum[:], digestBytes) {
-				fmt.Println("Invalid digest for node")
-				os.Exit(1)
-			}
-
-			count := 0
-
-			for i := 1; i <= len(config.Signatories); i++ {
-				signatureFile := fmt.Sprintf(ex+".dgst.sig.%d", i)
-				sig, err := os.ReadFile(signatureFile)
-				if err != nil {
-					continue
-				}
-
-				pubkey, _ := hex.DecodeString(config.Signatories[i-1])
-				if !ed448.Verify(pubkey, digest, sig, "") {
-					fmt.Printf("Failed signature check for signatory #%d\n", i)
-					os.Exit(1)
-				}
-				count++
-			}
-
-			if count < ((len(config.Signatories)-4)/2)+((len(config.Signatories)-4)%2) {
-				fmt.Printf("Quorum on signatures not met")
-				os.Exit(1)
-			}
-
-			fmt.Println("Signature check passed")
-		}
-	} else {
-		fmt.Println("Signature check disabled, skipping...")
-	}
-
 	if *memprofile != "" && *core == 0 {
 		go func() {
 			for {
@@ -262,291 +184,177 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	if *pprofServer != "" && *core == 0 {
-		go func() {
-			mux := http.NewServeMux()
-			mux.HandleFunc("/debug/pprof/", npprof.Index)
-			mux.HandleFunc("/debug/pprof/cmdline", npprof.Cmdline)
-			mux.HandleFunc("/debug/pprof/profile", npprof.Profile)
-			mux.HandleFunc("/debug/pprof/symbol", npprof.Symbol)
-			mux.HandleFunc("/debug/pprof/trace", npprof.Trace)
-			log.Fatal(http.ListenAndServe(*pprofServer, mux))
-		}()
-	}
-
-	if *prometheusServer != "" && *core == 0 {
-		go func() {
-			mux := http.NewServeMux()
-			mux.Handle("/metrics", promhttp.Handler())
-			log.Fatal(http.ListenAndServe(*prometheusServer, mux))
-		}()
-	}
-
-	if *balance {
-		config, err := config.LoadConfig(*configDirectory, "", false)
-		if err != nil {
-			panic(err)
-		}
-
-		printBalance(config)
-
-		return
-	}
-
-	if *peerId {
-		config, err := config.LoadConfig(*configDirectory, "", false)
-		if err != nil {
-			panic(err)
-		}
-
-		printPeerID(config.P2P)
-		return
-	}
-
-	if *importPrivKey != "" {
-		config, err := config.LoadConfig(*configDirectory, *importPrivKey, false)
-		if err != nil {
-			panic(err)
-		}
-
-		printPeerID(config.P2P)
-		fmt.Println("Import completed, you are ready for the launch.")
-		return
-	}
-
-	if *nodeInfo {
-		config, err := config.LoadConfig(*configDirectory, "", false)
-		if err != nil {
-			panic(err)
-		}
-
-		printNodeInfo(config)
-		return
-	}
-
 	if !*dbConsole && *core == 0 {
 		config.PrintLogo()
 		config.PrintVersion(uint8(*network))
 		fmt.Println(" ")
 	}
 
-	nodeConfig, err := config.LoadConfig(*configDirectory, "", false)
-	if err != nil {
-		panic(err)
-	}
-
-	if *compactDB && *core == 0 {
-		db := store.NewPebbleDB(nodeConfig.DB)
-		if err := db.CompactAll(); err != nil {
-			panic(err)
-		}
-		if err := db.Close(); err != nil {
-			panic(err)
-		}
-		return
-	}
-
-	if *network != 0 {
-		if nodeConfig.P2P.BootstrapPeers[0] == config.BootstrapPeers[0] {
-			fmt.Println(
-				"Node has specified to run outside of mainnet but is still " +
-					"using default bootstrap list. This will fail. Exiting.",
-			)
-			os.Exit(1)
-		}
-
-		nodeConfig.Engine.GenesisSeed = fmt.Sprintf(
-			"%02x%s",
-			byte(*network),
-			nodeConfig.Engine.GenesisSeed,
-		)
-		nodeConfig.P2P.Network = uint8(*network)
-		fmt.Println(
-			"Node is operating outside of mainnet – be sure you intended to do this.",
-		)
-	}
-
-	// If it's not explicitly set to true, we should defer to flags
-	if !nodeConfig.Engine.FullProver {
-		nodeConfig.Engine.FullProver = !*lightProver
-	}
-
-	clearIfTestData(*configDirectory, nodeConfig)
-
-	if *dbConsole {
-		console, err := app.NewDBConsole(nodeConfig)
-		if err != nil {
-			panic(err)
-		}
-
-		console.Run()
-		return
-	}
-
-	if *dhtOnly {
-		done := make(chan os.Signal, 1)
-		signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
-		dht, err := app.NewDHTNode(nodeConfig)
-		if err != nil {
-			panic(err)
-		}
-
-		go func() {
-			dht.Start()
-		}()
-
-		<-done
-		dht.Stop()
-		return
-	}
-
-	if len(nodeConfig.Engine.DataWorkerMultiaddrs) == 0 {
-		maxProcs, numCPU := runtime.GOMAXPROCS(0), runtime.NumCPU()
-		if maxProcs > numCPU && !nodeConfig.Engine.AllowExcessiveGOMAXPROCS {
-			fmt.Println("GOMAXPROCS is set higher than the number of available CPUs.")
-			os.Exit(1)
-		}
-
-		nodeConfig.Engine.DataWorkerCount = qruntime.WorkerCount(
-			nodeConfig.Engine.DataWorkerCount, true,
-		)
-	}
-
-	if *core != 0 {
-		rdebug.SetMemoryLimit(nodeConfig.Engine.DataWorkerMemoryLimit)
-
-		if *parentProcess == 0 && len(nodeConfig.Engine.DataWorkerMultiaddrs) == 0 {
-			panic("parent process pid not specified")
-		}
-
-		l, err := zap.NewProduction()
-		if err != nil {
-			panic(err)
-		}
-
-		rpcMultiaddr := fmt.Sprintf(
-			nodeConfig.Engine.DataWorkerBaseListenMultiaddr,
-			int(nodeConfig.Engine.DataWorkerBaseListenPort)+*core-1,
-		)
-
-		if len(nodeConfig.Engine.DataWorkerMultiaddrs) != 0 {
-			rpcMultiaddr = nodeConfig.Engine.DataWorkerMultiaddrs[*core-1]
-		}
-
-		srv, err := rpc.NewDataWorkerIPCServer(
-			rpcMultiaddr,
-			l,
-			uint32(*core)-1,
-			qcrypto.NewWesolowskiFrameProver(l),
-			nodeConfig,
-			*parentProcess,
-		)
-		if err != nil {
-			panic(err)
-		}
-
-		err = srv.Start()
-		if err != nil {
-			panic(err)
-		}
-		return
-	} else {
-		totalMemory := int64(memory.TotalMemory())
-		dataWorkerReservedMemory := int64(0)
-		if len(nodeConfig.Engine.DataWorkerMultiaddrs) == 0 {
-			dataWorkerReservedMemory = nodeConfig.Engine.DataWorkerMemoryLimit * int64(nodeConfig.Engine.DataWorkerCount)
-		}
-		switch availableOverhead := totalMemory - dataWorkerReservedMemory; {
-		case totalMemory < dataWorkerReservedMemory:
-			fmt.Println("The memory allocated to data workers exceeds the total system memory.")
-			fmt.Println("You are at risk of running out of memory during runtime.")
-		case availableOverhead < 8*1024*1024*1024:
-			fmt.Println("The memory available to the node, unallocated to the data workers, is less than 8GiB.")
-			fmt.Println("You are at risk of running out of memory during runtime.")
-		default:
-			if _, explicitGOMEMLIMIT := os.LookupEnv("GOMEMLIMIT"); !explicitGOMEMLIMIT {
-				rdebug.SetMemoryLimit(availableOverhead * 8 / 10)
-			}
-			if _, explicitGOGC := os.LookupEnv("GOGC"); !explicitGOGC {
-				rdebug.SetGCPercent(10)
-			}
-		}
-	}
-
-	fmt.Println("Loading ceremony state and starting node...")
-
-	if !*integrityCheck {
-		go spawnDataWorkers(nodeConfig)
-		defer stopDataWorkers()
-	}
+	maxProcs := runtime.GOMAXPROCS(0)
 
 	kzg.Init()
 
-	report := RunSelfTestIfNeeded(*configDirectory, nodeConfig)
+	fmt.Println("Max Cores:", maxProcs)
+	fmt.Println("Performing proof tree tests...")
 
-	if *core == 0 {
-		for {
-			genesis, err := config.DownloadAndVerifyGenesis(uint(nodeConfig.P2P.Network))
-			if err != nil {
-				time.Sleep(10 * time.Minute)
-				continue
+	fmt.Println("\nTree Insertion")
+	sets := []int{1000, 10000, 100000, 1000000, 10000000, 100000000}
+	for _, set := range sets {
+		for i := 1; i <= maxProcs; i *= 2 {
+			fmt.Println("Total Parallelism:", i)
+			var total atomic.Int64
+			wg := sync.WaitGroup{}
+			wg.Add(i)
+			for j := 0; j < i; j++ {
+				go func() {
+					defer wg.Done()
+					vecTree := &qcrypto.VectorCommitmentTree{}
+					for k := 0; k < set; k++ {
+						d := make([]byte, 32)
+						rand.Read(d)
+						start := time.Now()
+						err := vecTree.Insert(d, d)
+						total.Add(int64(time.Since(start)))
+						if err != nil {
+							panic(err)
+						}
+					}
+				}()
 			}
-
-			nodeConfig.Engine.GenesisSeed = genesis.GenesisSeedHex
-			break
+			wg.Wait()
+			fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(set)/time.Duration(i))
 		}
 	}
 
-	RunForkRepairIfNeeded(nodeConfig)
-
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
-	var node *app.Node
-	if *debug {
-		node, err = app.NewDebugNode(nodeConfig, report)
-	} else {
-		node, err = app.NewNode(nodeConfig, report)
-	}
-
-	if err != nil {
-		panic(err)
-	}
-
-	if *integrityCheck {
-		fmt.Println("Running integrity check...")
-		node.VerifyProofIntegrity()
-		fmt.Println("Integrity check passed!")
-		return
-	}
-
-	// runtime.GOMAXPROCS(1)
-
-	node.Start()
-	defer node.Stop()
-
-	if nodeConfig.ListenGRPCMultiaddr != "" {
-		srv, err := rpc.NewRPCServer(
-			nodeConfig.ListenGRPCMultiaddr,
-			nodeConfig.ListenRestMultiaddr,
-			node.GetLogger(),
-			node.GetDataProofStore(),
-			node.GetClockStore(),
-			node.GetCoinStore(),
-			node.GetKeyManager(),
-			node.GetPubSub(),
-			node.GetMasterClock(),
-			node.GetExecutionEngines(),
-		)
-		if err != nil {
-			panic(err)
+	fmt.Println("\nTree Deletion")
+	for _, set := range sets {
+		for i := 1; i <= maxProcs; i *= 2 {
+			fmt.Println("Total Parallelism:", i)
+			var total atomic.Int64
+			wg := sync.WaitGroup{}
+			wg.Add(i)
+			for j := 0; j < i; j++ {
+				go func() {
+					defer wg.Done()
+					vecTree := &qcrypto.VectorCommitmentTree{}
+					data := make([][]byte, set)
+					for k := 0; k < set; k++ {
+						d := make([]byte, 32)
+						rand.Read(d)
+						data[k] = d
+						err := vecTree.Insert(d, d)
+						if err != nil {
+							panic(err)
+						}
+					}
+					for k := 0; k < set; k++ {
+						start := time.Now()
+						err := vecTree.Delete(data[k])
+						total.Add(int64(time.Since(start)))
+						if err != nil {
+							panic(err)
+						}
+					}
+				}()
+			}
+			wg.Wait()
+			fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(set)/time.Duration(i))
 		}
-		if err := srv.Start(); err != nil {
-			panic(err)
-		}
-		defer srv.Stop()
 	}
 
-	<-done
+	fmt.Println("\nTree Commit")
+	for _, set := range sets {
+		for i := 1; i <= maxProcs; i *= 2 {
+			fmt.Println("Total Parallelism:", i)
+			var total atomic.Int64
+			wg := sync.WaitGroup{}
+			wg.Add(i)
+			for j := 0; j < i; j++ {
+				go func() {
+					defer wg.Done()
+					vecTree := &qcrypto.VectorCommitmentTree{}
+					data := make([][]byte, set)
+					for k := 0; k < set; k++ {
+						d := make([]byte, 32)
+						rand.Read(d)
+						data[k] = d
+						err := vecTree.Insert(d, d)
+						if err != nil {
+							panic(err)
+						}
+					}
+
+					start := time.Now()
+					vecTree.Commit()
+					total.Add(int64(time.Since(start)))
+				}()
+			}
+			wg.Wait()
+			fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(i))
+		}
+	}
+
+	fmt.Println("\nTree Proof")
+	for _, set := range sets {
+		for i := 1; i <= maxProcs; i *= 2 {
+			fmt.Println("Total Parallelism:", i)
+			var total atomic.Int64
+			wg := sync.WaitGroup{}
+			wg.Add(i)
+			for j := 0; j < i; j++ {
+				go func() {
+					defer wg.Done()
+					vecTree := &qcrypto.VectorCommitmentTree{}
+					data := make([][]byte, set)
+					for k := 0; k < set; k++ {
+						d := make([]byte, 32)
+						rand.Read(d)
+						data[k] = d
+						err := vecTree.Insert(d, d)
+						if err != nil {
+							panic(err)
+						}
+					}
+					vecTree.Commit()
+					for k := 0; k < set; k++ {
+						start := time.Now()
+						vecTree.Prove(data[k])
+						total.Add(int64(time.Since(start)))
+					}
+				}()
+			}
+			wg.Wait()
+			fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(set)/time.Duration(i))
+		}
+	}
+
+	fmt.Println("\nVDF Prove")
+	log, _ := zap.NewProduction()
+	prover := qcrypto.NewWesolowskiFrameProver(log)
+	sets = []int{100000, 200000, 500000, 1000000, 2000000, 5000000}
+	for _, set := range sets {
+		for i := 1; i <= maxProcs; i *= 2 {
+			fmt.Println("Total Parallelism:", i)
+			var total atomic.Int64
+			wg := sync.WaitGroup{}
+			wg.Add(i)
+			for j := 0; j < i; j++ {
+				go func() {
+					defer wg.Done()
+					data := make([]byte, 516)
+					rand.Read(data)
+					start := time.Now()
+					_, err := prover.CalculateChallengeProof(data, uint32(set))
+					total.Add(int64(time.Since(start)))
+					if err != nil {
+						panic(err)
+					}
+				}()
+			}
+			wg.Wait()
+			fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(i))
+		}
+	}
 }
 
 var dataWorkers []*exec.Cmd
