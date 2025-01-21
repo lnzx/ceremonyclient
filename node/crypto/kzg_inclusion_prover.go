@@ -5,16 +5,19 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/crypto/sha3"
 	rbls48581 "source.quilibrium.com/quilibrium/monorepo/bls48581"
+	"source.quilibrium.com/quilibrium/monorepo/node/config"
 	"source.quilibrium.com/quilibrium/monorepo/node/protobufs"
 )
 
 type KZGInclusionProver struct {
-	logger *zap.Logger
+	logger  *zap.Logger
+	workers chan struct{}
 }
 
-func NewKZGInclusionProver(logger *zap.Logger) *KZGInclusionProver {
+func NewKZGInclusionProver(logger *zap.Logger, config *config.EngineConfig) *KZGInclusionProver {
 	return &KZGInclusionProver{
-		logger: logger,
+		logger:  logger,
+		workers: make(chan struct{}, config.PendingCommitWorkers),
 	}
 }
 
@@ -97,6 +100,18 @@ func (k *KZGInclusionProver) VerifyFrame(
 	}
 
 	return nil
+}
+
+func (k *KZGInclusionProver) Commit(
+	data []byte,
+	polySize uint64,
+) ([]byte, error) {
+	k.workers <- struct{}{}
+	defer func() {
+		<-k.workers
+	}()
+
+	return k.CommitRaw(data, polySize)
 }
 
 func (k *KZGInclusionProver) CommitRaw(

@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"source.quilibrium.com/quilibrium/monorepo/go-libp2p-blossomsub/pb"
+	"source.quilibrium.com/quilibrium/monorepo/node/config"
 	"source.quilibrium.com/quilibrium/monorepo/node/consensus"
 	qtime "source.quilibrium.com/quilibrium/monorepo/node/consensus/time"
 	qcrypto "source.quilibrium.com/quilibrium/monorepo/node/crypto"
@@ -126,10 +127,13 @@ func TestHandlePreMidnightMint(t *testing.T) {
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		},
-		currentReceivingSyncPeers:       0,
-		lastFrameReceivedAt:             time.Time{},
-		frameProverTries:                []*tries.RollingFrecencyCritbitTrie{},
-		inclusionProver:                 qcrypto.NewKZGInclusionProver(log),
+		currentReceivingSyncPeers: 0,
+		lastFrameReceivedAt:       time.Time{},
+		frameProverTries:          []*tries.RollingFrecencyCritbitTrie{},
+		inclusionProver: qcrypto.NewKZGInclusionProver(
+			log,
+			&config.EngineConfig{PendingCommitWorkers: 1},
+		),
 		syncingStatus:                   SyncStatusNotSyncing,
 		peerMap:                         map[string]*peerInfo{},
 		uncooperativePeersMap:           map[string]*peerInfo{},

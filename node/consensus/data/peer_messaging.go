@@ -351,7 +351,7 @@ func (e *DataClockConsensusEngine) handleMint(
 
 			output := make([]byte, outputLen)
 			copy(output[:], data[16+inputLen+8:])
-			dataProver := crypto.NewKZGInclusionProver(e.logger)
+			dataProver := crypto.NewKZGInclusionProver(e.logger, e.config.Engine)
 			wesoProver := crypto.NewWesolowskiFrameProver(e.logger)
 			index = binary.BigEndian.Uint32(output[:4])
 			indexProof = output[4:520]

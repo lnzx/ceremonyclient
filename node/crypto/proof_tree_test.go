@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"testing"
 
+	"go.uber.org/zap"
 	"source.quilibrium.com/quilibrium/monorepo/bls48581/generated/bls48581"
+	"source.quilibrium.com/quilibrium/monorepo/node/config"
 )
 
 func BenchmarkVectorCommitmentTreeInsert(b *testing.B) {
@@ -27,6 +29,8 @@ func BenchmarkVectorCommitmentTreeInsert(b *testing.B) {
 func BenchmarkVectorCommitmentTreeCommit(b *testing.B) {
 	tree := &VectorCommitmentTree{}
 	addresses := [][]byte{}
+	log, _ := zap.NewProduction()
+	prover := NewKZGInclusionProver(log, &config.EngineConfig{PendingCommitWorkers: 1})
 
 	for i := range b.N {
 		d := make([]byte, 32)
@@ -36,13 +40,15 @@ func BenchmarkVectorCommitmentTreeCommit(b *testing.B) {
 		if err != nil {
 			b.Errorf("Failed to insert item %d: %v", i, err)
 		}
-		tree.Commit()
+		tree.Commit(prover)
 	}
 }
 
 func BenchmarkVectorCommitmentTreeProve(b *testing.B) {
 	tree := &VectorCommitmentTree{}
 	addresses := [][]byte{}
+	log, _ := zap.NewProduction()
+	prover := NewKZGInclusionProver(log, &config.EngineConfig{PendingCommitWorkers: 1})
 
 	for i := range b.N {
 		d := make([]byte, 32)
@@ -52,13 +58,15 @@ func BenchmarkVectorCommitmentTreeProve(b *testing.B) {
 		if err != nil {
 			b.Errorf("Failed to insert item %d: %v", i, err)
 		}
-		tree.Prove(d)
+		tree.Prove(prover, d)
 	}
 }
 
 func BenchmarkVectorCommitmentTreeVerify(b *testing.B) {
 	tree := &VectorCommitmentTree{}
 	addresses := [][]byte{}
+	log, _ := zap.NewProduction()
+	prover := NewKZGInclusionProver(log, &config.EngineConfig{PendingCommitWorkers: 1})
 
 	for i := range b.N {
 		d := make([]byte, 32)
@@ -68,8 +76,8 @@ func BenchmarkVectorCommitmentTreeVerify(b *testing.B) {
 		if err != nil {
 			b.Errorf("Failed to insert item %d: %v", i, err)
 		}
-		p := tree.Prove(d)
-		if !tree.Verify(d, p) {
+		p := tree.Prove(prover, d)
+		if !tree.Verify(prover, d, p) {
 			b.Errorf("bad proof")
 		}
 	}
@@ -78,6 +86,8 @@ func BenchmarkVectorCommitmentTreeVerify(b *testing.B) {
 func TestVectorCommitmentTrees(t *testing.T) {
 	bls48581.Init()
 	tree := &VectorCommitmentTree{}
+	log, _ := zap.NewProduction()
+	prover := NewKZGInclusionProver(log, &config.EngineConfig{PendingCommitWorkers: 1})
 
 	// Test single insert
 	err := tree.Insert([]byte("key1"), []byte("value1"))
@@ -221,7 +231,7 @@ func TestVectorCommitmentTrees(t *testing.T) {
 
 	// Root should change after insert
 	tree.Insert([]byte("key1"), []byte("value1"))
-	firstRoot := tree.Root.Commit()
+	firstRoot := tree.Root.Commit(prover)
 
 	if bytes.Equal(firstRoot, bytes.Repeat([]byte{0x00}, 64)) {
 		t.Error("Root hash should change after insert")
@@ -229,7 +239,7 @@ func TestVectorCommitmentTrees(t *testing.T) {
 
 	// Root should change after update
 	tree.Insert([]byte("key1"), []byte("value2"))
-	secondRoot := tree.Root.Commit()
+	secondRoot := tree.Root.Commit(prover)
 
 	if bytes.Equal(secondRoot, firstRoot) {
 		t.Error("Root hash should change after update")
@@ -294,15 +304,15 @@ func TestVectorCommitmentTrees(t *testing.T) {
 		}
 	}
 
-	tcommit := tree.Root.Commit()
-	cmptcommit := cmptree.Root.Commit()
+	tcommit := tree.Root.Commit(prover)
+	cmptcommit := cmptree.Root.Commit(prover)
 
 	if !bytes.Equal(tcommit, cmptcommit) {
 		t.Errorf("tree mismatch, %x, %x", tcommit, cmptcommit)
 	}
 
-	proofs := tree.Prove(addresses[500])
-	if !tree.Verify(addresses[500], proofs) {
+	proofs := tree.Prove(prover, addresses[500])
+	if !tree.Verify(prover, addresses[500], proofs) {
 		t.Errorf("proof failed")
 	}
 

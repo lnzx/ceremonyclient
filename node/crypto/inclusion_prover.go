@@ -15,6 +15,10 @@ type InclusionAggregateProof struct {
 }
 
 type InclusionProver interface {
+	Commit(
+		data []byte,
+		polySize uint64,
+	) ([]byte, error)
 	VerifyFrame(frame *protobufs.ClockFrame) error
 	CommitRaw(
 		data []byte,

@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 	"golang.org/x/crypto/sha3"
+	"source.quilibrium.com/quilibrium/monorepo/node/config"
 	"source.quilibrium.com/quilibrium/monorepo/node/consensus"
 	"source.quilibrium.com/quilibrium/monorepo/node/consensus/master"
 	"source.quilibrium.com/quilibrium/monorepo/node/crypto"
@@ -108,7 +109,7 @@ func (n *Node) VerifyProofIntegrity() {
 		panic(e)
 	}
 
-	dataProver := crypto.NewKZGInclusionProver(n.logger)
+	dataProver := crypto.NewKZGInclusionProver(n.logger, &config.EngineConfig{PendingCommitWorkers: 1})
 	wesoProver := crypto.NewWesolowskiFrameProver(n.logger)
 
 	for j := int(i); j >= 0; j-- {

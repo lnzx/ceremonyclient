@@ -7,6 +7,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"sync"
 
 	rbls48581 "source.quilibrium.com/quilibrium/monorepo/bls48581"
 )
@@ -17,13 +18,13 @@ func init() {
 }
 
 const (
-	BranchNodes = 1024
-	BranchBits  = 10 // log2(1024)
+	BranchNodes = 256
+	BranchBits  = 10 // log2(256)
 	BranchMask  = BranchNodes - 1
 )
 
 type VectorCommitmentNode interface {
-	Commit() []byte
+	Commit(prover InclusionProver) []byte
 }
 
 type VectorCommitmentLeafNode struct {
@@ -38,7 +39,7 @@ type VectorCommitmentBranchNode struct {
 	Commitment []byte
 }
 
-func (n *VectorCommitmentLeafNode) Commit() []byte {
+func (n *VectorCommitmentLeafNode) Commit(prover InclusionProver) []byte {
 	if n.Commitment == nil {
 		h := sha512.New()
 		h.Write([]byte{0})
@@ -49,42 +50,55 @@ func (n *VectorCommitmentLeafNode) Commit() []byte {
 	return n.Commitment
 }
 
-func (n *VectorCommitmentBranchNode) Commit() []byte {
+func (n *VectorCommitmentBranchNode) Commit(prover InclusionProver) []byte {
 	if n.Commitment == nil {
-		data := []byte{}
-		for _, child := range n.Children {
+		children := make([][]byte, len(n.Children))
+		wg := sync.WaitGroup{}
+		for i, child := range n.Children {
 			if child != nil {
-				out := child.Commit()
-				switch c := child.(type) {
-				case *VectorCommitmentBranchNode:
-					h := sha512.New()
-					h.Write([]byte{1})
-					for _, p := range c.Prefix {
-						h.Write(binary.BigEndian.AppendUint32([]byte{}, uint32(p)))
+				wg.Add(1)
+				child := child
+				go func() {
+					defer wg.Done()
+					out := child.Commit(prover)
+					switch c := child.(type) {
+					case *VectorCommitmentBranchNode:
+						h := sha512.New()
+						h.Write([]byte{1})
+						for _, p := range c.Prefix {
+							h.Write(binary.BigEndian.AppendUint32([]byte{}, uint32(p)))
+						}
+						h.Write(out)
+						out = h.Sum(nil)
+					case *VectorCommitmentLeafNode:
+						// do nothing
 					}
-					h.Write(out)
-					out = h.Sum(nil)
-				case *VectorCommitmentLeafNode:
-					// do nothing
-				}
-				data = append(data, out...)
+					children[i] = out
+				}()
 			} else {
-				data = append(data, make([]byte, 64)...)
+				children[i] = make([]byte, 64)
 			}
 		}
 
-		n.Commitment = rbls48581.CommitRaw(data, 1024)
+		wg.Wait()
+
+		data := []byte{}
+		for _, c := range children {
+			data = append(data, c...)
+		}
+
+		n.Commitment, _ = prover.Commit(data, 256)
 	}
 
 	return n.Commitment
 }
 
-func (n *VectorCommitmentBranchNode) Verify(index int, proof []byte) bool {
+func (n *VectorCommitmentBranchNode) Verify(prover InclusionProver, index int, proof []byte) bool {
 	data := []byte{}
 	if n.Commitment == nil {
 		for _, child := range n.Children {
 			if child != nil {
-				out := child.Commit()
+				out := child.Commit(prover)
 				switch c := child.(type) {
 				case *VectorCommitmentBranchNode:
 					h := sha512.New()
@@ -103,12 +117,12 @@ func (n *VectorCommitmentBranchNode) Verify(index int, proof []byte) bool {
 			}
 		}
 
-		n.Commitment = rbls48581.CommitRaw(data, 1024)
+		n.Commitment = rbls48581.CommitRaw(data, 256)
 		data = data[64*index : 64*(index+1)]
 	} else {
 		child := n.Children[index]
 		if child != nil {
-			out := child.Commit()
+			out := child.Commit(prover)
 			switch c := child.(type) {
 			case *VectorCommitmentBranchNode:
 				h := sha512.New()
@@ -127,14 +141,14 @@ func (n *VectorCommitmentBranchNode) Verify(index int, proof []byte) bool {
 		}
 	}
 
-	return rbls48581.VerifyRaw(data, n.Commitment, uint64(index), proof, 1024)
+	return rbls48581.VerifyRaw(data, n.Commitment, uint64(index), proof, 256)
 }
 
-func (n *VectorCommitmentBranchNode) Prove(index int) []byte {
+func (n *VectorCommitmentBranchNode) Prove(prover InclusionProver, index int) []byte {
 	data := []byte{}
 	for _, child := range n.Children {
 		if child != nil {
-			out := child.Commit()
+			out := child.Commit(prover)
 			switch c := child.(type) {
 			case *VectorCommitmentBranchNode:
 				h := sha512.New()
@@ -153,7 +167,7 @@ func (n *VectorCommitmentBranchNode) Prove(index int) []byte {
 		}
 	}
 
-	return rbls48581.ProveRaw(data, uint64(index), 1024)
+	return rbls48581.ProveRaw(data, uint64(index), 256)
 }
 
 type VectorCommitmentTree struct {
@@ -283,7 +297,7 @@ func (t *VectorCommitmentTree) Insert(key, value []byte) error {
 	return nil
 }
 
-func (t *VectorCommitmentTree) Verify(key []byte, proofs [][]byte) bool {
+func (t *VectorCommitmentTree) Verify(prover InclusionProver, key []byte, proofs [][]byte) bool {
 	if len(key) == 0 {
 		return false
 	}
@@ -316,7 +330,7 @@ func (t *VectorCommitmentTree) Verify(key []byte, proofs [][]byte) bool {
 			// Get final nibble after prefix
 			finalNibble := getNextNibble(key, depth+len(n.Prefix)*BranchBits)
 
-			if !n.Verify(finalNibble, proofs[0]) {
+			if !n.Verify(prover, finalNibble, proofs[0]) {
 				return false
 			}
 
@@ -329,7 +343,7 @@ func (t *VectorCommitmentTree) Verify(key []byte, proofs [][]byte) bool {
 	return verify(t.Root, proofs, 0)
 }
 
-func (t *VectorCommitmentTree) Prove(key []byte) [][]byte {
+func (t *VectorCommitmentTree) Prove(prover InclusionProver, key []byte) [][]byte {
 	if len(key) == 0 {
 		return nil
 	}
@@ -358,7 +372,7 @@ func (t *VectorCommitmentTree) Prove(key []byte) [][]byte {
 			// Get final nibble after prefix
 			finalNibble := getNextNibble(key, depth+len(n.Prefix)*BranchBits)
 
-			proofs := [][]byte{n.Prove(finalNibble)}
+			proofs := [][]byte{n.Prove(prover, finalNibble)}
 
 			return append(proofs, prove(n.Children[finalNibble], depth+len(n.Prefix)*BranchBits+BranchBits)...)
 		}
@@ -482,11 +496,11 @@ func (t *VectorCommitmentTree) Delete(key []byte) error {
 }
 
 // Commit returns the root of the tree
-func (t *VectorCommitmentTree) Commit() []byte {
+func (t *VectorCommitmentTree) Commit(prover InclusionProver) []byte {
 	if t.Root == nil {
 		return make([]byte, 64)
 	}
-	return t.Root.Commit()
+	return t.Root.Commit(prover)
 }
 
 func debugNode(node VectorCommitmentNode, depth int, prefix string) {

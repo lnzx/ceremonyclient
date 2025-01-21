@@ -198,10 +198,7 @@ func main() {
 	fmt.Println("Performing proof tree tests...")
 
 	fmt.Println("\nTree Insertion")
-	sets := []int{1000, 10000, 100000, 1000000, 10000000}
-	if memory.TotalMemory() > 64*1024*1024*1024 {
-		sets = append(sets, 100000000)
-	}
+	sets := []int{1000, 10000, 100000, 1000000}
 	for _, set := range sets {
 		var total atomic.Int64
 		vecTree := &qcrypto.VectorCommitmentTree{}
@@ -243,6 +240,12 @@ func main() {
 		fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(set))
 	}
 
+	log, _ := zap.NewProduction()
+	incProver := qcrypto.NewKZGInclusionProver(
+		log,
+		&config.EngineConfig{PendingCommitWorkers: int64(runtime.NumCPU())},
+	)
+
 	fmt.Println("\nTree Commit")
 	for _, set := range sets {
 		var total atomic.Int64
@@ -259,7 +262,7 @@ func main() {
 		}
 
 		start := time.Now()
-		vecTree.Commit()
+		vecTree.Commit(incProver)
 		total.Add(int64(time.Since(start)))
 		fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load()))
 	}
@@ -278,17 +281,16 @@ func main() {
 				panic(err)
 			}
 		}
-		vecTree.Commit()
+		vecTree.Commit(incProver)
 		for k := 0; k < set; k++ {
 			start := time.Now()
-			vecTree.Prove(data[k])
+			vecTree.Prove(incProver, data[k])
 			total.Add(int64(time.Since(start)))
 		}
 		fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(set))
 	}
 
 	fmt.Println("\nVDF Prove")
-	log, _ := zap.NewProduction()
 	prover := qcrypto.NewWesolowskiFrameProver(log)
 	sets = []int{100000, 200000, 500000, 1000000, 2000000, 5000000}
 	for _, set := range sets {
