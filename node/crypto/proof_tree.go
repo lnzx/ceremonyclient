@@ -18,8 +18,8 @@ func init() {
 }
 
 const (
-	BranchNodes = 256
-	BranchBits  = 10 // log2(256)
+	BranchNodes = 64
+	BranchBits  = 6 // log2(64)
 	BranchMask  = BranchNodes - 1
 )
 
@@ -87,7 +87,7 @@ func (n *VectorCommitmentBranchNode) Commit(prover InclusionProver) []byte {
 			data = append(data, c...)
 		}
 
-		n.Commitment, _ = prover.Commit(data, 256)
+		n.Commitment, _ = prover.Commit(data, 64)
 	}
 
 	return n.Commitment
@@ -117,7 +117,7 @@ func (n *VectorCommitmentBranchNode) Verify(prover InclusionProver, index int, p
 			}
 		}
 
-		n.Commitment = rbls48581.CommitRaw(data, 256)
+		n.Commitment = rbls48581.CommitRaw(data, 64)
 		data = data[64*index : 64*(index+1)]
 	} else {
 		child := n.Children[index]
@@ -141,7 +141,7 @@ func (n *VectorCommitmentBranchNode) Verify(prover InclusionProver, index int, p
 		}
 	}
 
-	return rbls48581.VerifyRaw(data, n.Commitment, uint64(index), proof, 256)
+	return rbls48581.VerifyRaw(data, n.Commitment, uint64(index), proof, 64)
 }
 
 func (n *VectorCommitmentBranchNode) Prove(prover InclusionProver, index int) []byte {
@@ -167,7 +167,7 @@ func (n *VectorCommitmentBranchNode) Prove(prover InclusionProver, index int) []
 		}
 	}
 
-	return rbls48581.ProveRaw(data, uint64(index), 256)
+	return rbls48581.ProveRaw(data, uint64(index), 64)
 }
 
 type VectorCommitmentTree struct {
