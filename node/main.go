@@ -197,102 +197,10 @@ func main() {
 	fmt.Println("Max Cores:", maxProcs)
 	fmt.Println("Performing proof tree tests...")
 
-	fmt.Println("\nTree Insertion")
-	sets := []int{1000, 10000, 100000, 1000000}
-	for _, set := range sets {
-		var total atomic.Int64
-		vecTree := &qcrypto.VectorCommitmentTree{}
-		for k := 0; k < set; k++ {
-			d := make([]byte, 32)
-			rand.Read(d)
-			start := time.Now()
-			err := vecTree.Insert(d, d)
-			total.Add(int64(time.Since(start)))
-			if err != nil {
-				panic(err)
-			}
-		}
-		fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(set))
-	}
-
-	fmt.Println("\nTree Deletion")
-	for _, set := range sets {
-		var total atomic.Int64
-		vecTree := &qcrypto.VectorCommitmentTree{}
-		data := make([][]byte, set)
-		for k := 0; k < set; k++ {
-			d := make([]byte, 32)
-			rand.Read(d)
-			data[k] = d
-			err := vecTree.Insert(d, d)
-			if err != nil {
-				panic(err)
-			}
-		}
-		for k := 0; k < set; k++ {
-			start := time.Now()
-			err := vecTree.Delete(data[k])
-			total.Add(int64(time.Since(start)))
-			if err != nil {
-				panic(err)
-			}
-		}
-		fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(set))
-	}
-
-	log, _ := zap.NewProduction()
-	incProver := qcrypto.NewKZGInclusionProver(
-		log,
-		&config.EngineConfig{PendingCommitWorkers: int64(runtime.NumCPU())},
-	)
-
-	fmt.Println("\nTree Commit")
-	for _, set := range sets {
-		var total atomic.Int64
-		vecTree := &qcrypto.VectorCommitmentTree{}
-		data := make([][]byte, set)
-		for k := 0; k < set; k++ {
-			d := make([]byte, 32)
-			rand.Read(d)
-			data[k] = d
-			err := vecTree.Insert(d, d)
-			if err != nil {
-				panic(err)
-			}
-		}
-
-		start := time.Now()
-		vecTree.Commit(incProver)
-		total.Add(int64(time.Since(start)))
-		fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load()))
-	}
-
-	fmt.Println("\nTree Proof")
-	for _, set := range sets {
-		var total atomic.Int64
-		vecTree := &qcrypto.VectorCommitmentTree{}
-		data := make([][]byte, set)
-		for k := 0; k < set; k++ {
-			d := make([]byte, 32)
-			rand.Read(d)
-			data[k] = d
-			err := vecTree.Insert(d, d)
-			if err != nil {
-				panic(err)
-			}
-		}
-		vecTree.Commit(incProver)
-		for k := 0; k < set; k++ {
-			start := time.Now()
-			vecTree.Prove(incProver, data[k])
-			total.Add(int64(time.Since(start)))
-		}
-		fmt.Println("Size: ", set, "Op Speed: ", time.Duration(total.Load())/time.Duration(set))
-	}
-
 	fmt.Println("\nVDF Prove")
+	log, _ := zap.NewProduction()
 	prover := qcrypto.NewWesolowskiFrameProver(log)
-	sets = []int{100000, 200000, 500000, 1000000, 2000000, 5000000}
+	sets := []int{100000, 200000, 500000, 1000000, 2000000, 5000000}
 	for _, set := range sets {
 		for i := 1; i <= maxProcs; i *= 2 {
 			fmt.Println("Total Parallelism:", i)
