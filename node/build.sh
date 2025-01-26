@@ -19,7 +19,7 @@ case "$os_type" in
         # Check if the architecture is ARM
         if [[ "$(uname -m)" == "arm64" ]]; then
             # MacOS ld doesn't support -Bstatic and -Bdynamic, so it's important that there is only a static version of the library
-            go build -ldflags "-linkmode 'external' -extldflags '-L$BINARIES_DIR -L/opt/homebrew/Cellar/mpfr/4.2.1/lib -I/opt/homebrew/Cellar/mpfr/4.2.1/include -L/opt/homebrew/Cellar/gmp/6.3.0/lib -I/opt/homebrew/Cellar/gmp/6.3.0/include -lbls48581 -lvdf -ldl -lm -lflint -lgmp -lmpfr'" "$@"
+            go build -ldflags "-linkmode 'external' -extldflags '-L$BINARIES_DIR -lbls48581 -lvdf -ldl -lm -lflint -lgmp -lmpfr'" "$@"
         else
             echo "Unsupported platform"
             exit 1
