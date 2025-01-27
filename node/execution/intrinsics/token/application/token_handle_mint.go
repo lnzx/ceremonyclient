@@ -160,12 +160,12 @@ func (a *TokenApplication) preProcessMint(
 			)
 		}
 
-		// Current frame - 2 is because the current frame is the newly created frame,
+		// Current frame - 1 is because the current frame is the newly created frame,
 		// and the provers are submitting proofs on the frame preceding the one they
 		// last saw. This enforces liveness and creates a punishment for being
 		// late.
 		if (previousFrame != nil && newFrameNumber <= previousFrame.FrameNumber) ||
-			newFrameNumber < currentFrameNumber-2 {
+			newFrameNumber < currentFrameNumber-1 {
 			previousFrameNumber := uint64(0)
 			if previousFrame != nil {
 				previousFrameNumber = previousFrame.FrameNumber
@@ -338,12 +338,12 @@ func (a *TokenApplication) preProcessMint(
 			)
 		}
 
-		// Current frame - 2 is because the current frame is the newly created frame,
+		// Current frame - 1 is because the current frame is the newly created frame,
 		// and the provers are submitting proofs on the frame preceding the one they
 		// last saw. This enforces liveness and creates a punishment for being
 		// late.
 		if (previousFrame != nil && newFrameNumber <= previousFrame.FrameNumber) ||
-			newFrameNumber < currentFrameNumber-2 {
+			newFrameNumber < currentFrameNumber-1 {
 			previousFrameNumber := uint64(0)
 			if previousFrame != nil {
 				previousFrameNumber = previousFrame.FrameNumber

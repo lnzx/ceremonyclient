@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"slices"
 	"strconv"
@@ -346,13 +347,21 @@ func NewTokenExecutionEngine(
 	e.proverPublicKey = publicKeyBytes
 	e.provingKeyAddress = provingKeyAddress
 
-	e.stateTree, err = e.clockStore.GetDataStateTree(e.intrinsicFilter)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		panic(err)
-	}
-
-	if e.stateTree == nil {
+	frame, _, err := e.clockStore.GetLatestDataClockFrame(e.intrinsicFilter)
+	if err != nil || frame.FrameNumber < 184479 {
 		e.rebuildStateTree()
+	} else {
+		e.stateTree, err = e.clockStore.GetDataStateTree(e.intrinsicFilter)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			e.logger.Error(
+				"error encountered while fetching state tree, rebuilding",
+				zap.Error(err),
+			)
+		}
+
+		if e.stateTree == nil {
+			e.rebuildStateTree()
+		}
 	}
 
 	e.wg.Add(1)
@@ -445,6 +454,15 @@ func (e *TokenExecutionEngine) rebuildStateTree() {
 	if err != nil {
 		panic(err)
 	}
+
+	e.logger.Info("committing state tree")
+
+	root := e.stateTree.Commit()
+
+	e.logger.Info(
+		"committed state tree",
+		zap.String("root", fmt.Sprintf("%x", root)),
+	)
 
 	err = e.clockStore.SetDataStateTree(txn, e.intrinsicFilter, e.stateTree)
 	if err != nil {
@@ -1028,6 +1046,15 @@ func (e *TokenExecutionEngine) ProcessFrame(
 			return nil, errors.Wrap(err, "process frame")
 		}
 	}
+
+	e.logger.Info("committing state tree")
+
+	root := stateTree.Commit()
+
+	e.logger.Info(
+		"commited state tree",
+		zap.String("root", fmt.Sprintf("%x", root)),
+	)
 
 	err = e.clockStore.SetDataStateTree(
 		txn,

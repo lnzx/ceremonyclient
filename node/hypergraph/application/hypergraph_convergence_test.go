@@ -22,9 +22,8 @@ func TestConvergence(t *testing.T) {
 	vertices := make([]*application.Vertex, numOperations)
 	for i := 0; i < numOperations; i++ {
 		vertices[i] = &application.Vertex{
-			AppAddress:   [32]byte{byte(i % 256)},
-			DataAddress:  [32]byte{byte(i / 256)},
-			SegmentOrder: uint16(i),
+			AppAddress:  [32]byte{byte(i % 256)},
+			DataAddress: [32]byte{byte(i / 256)},
 		}
 	}
 
@@ -33,7 +32,7 @@ func TestConvergence(t *testing.T) {
 		hyperedges[i] = &application.Hyperedge{
 			AppAddress:  [32]byte{byte(i % 256)},
 			DataAddress: [32]byte{byte(i / 256)},
-			Extrinsics:  make(map[[66]byte]application.Atom),
+			Extrinsics:  make(map[[64]byte]application.Atom),
 		}
 		// Add some random vertices as extrinsics
 		for j := 0; j < 3; j++ {

@@ -566,8 +566,6 @@ func (e *DataClockConsensusEngine) Start() <-chan error {
 		errChan <- nil
 	}()
 
-	go e.runPreMidnightProofWorker()
-
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()

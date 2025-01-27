@@ -1,0 +1,55 @@
+[package]
+name = "ed448-rust"
+version = "0.1.2"
+authors = ["Lolo_32 <lol.b@free.fr>"]
+edition = "2018"
+description = "Implementation of Edwards-Curve Digital Signature Algorithm (EdDSA) for ed448 only."
+license = "MIT/Apache-2.0"
+repository = "https://github.com/lolo32/ed448-rust"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+docinclude = [] # Used only for activating `doc(include="...")` on stable.
+
+[dependencies.lazy_static]
+version = "1.4.0"
+
+[dependencies.num-bigint]
+version = "0.4.0"
+
+[dependencies.num-integer]
+version = "0.1.44"
+
+[dependencies.num-traits]
+version = "0.2.14"
+
+[dependencies.opaque-debug]
+version = "0.3.0"
+
+[dependencies.rand_core]
+version = "0.6.2"
+default-features = false
+features = ["alloc"]
+
+[dependencies.sha3]
+version = "0.9.1"
+
+[dependencies.subtle]
+version = "2.4.0"
+default-features = false
+features = ["std"]
+
+[dev-dependencies.base64]
+version = "0.13.0"
+
+[dev-dependencies.hex]
+version = "0.4.3"
+
+[dev-dependencies.rand_core]
+version = "0.6.2"
+features = ["getrandom"]
+
+[package.metadata.docs.rs]
+rustc-args = ["--cfg", "docsrs"]
+features = ["docinclude"] # Activate `docinclude` during docs.rs build.

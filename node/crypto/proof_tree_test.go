@@ -9,6 +9,72 @@ import (
 	"source.quilibrium.com/quilibrium/monorepo/bls48581/generated/bls48581"
 )
 
+func BenchmarkVectorCommitmentTreeInsert(b *testing.B) {
+	tree := &VectorCommitmentTree{}
+	addresses := [][]byte{}
+
+	for i := range b.N {
+		d := make([]byte, 32)
+		rand.Read(d)
+		addresses = append(addresses, d)
+		err := tree.Insert(d, d)
+		if err != nil {
+			b.Errorf("Failed to insert item %d: %v", i, err)
+		}
+	}
+}
+
+func BenchmarkVectorCommitmentTreeCommit(b *testing.B) {
+	tree := &VectorCommitmentTree{}
+	addresses := [][]byte{}
+
+	for i := range b.N {
+		d := make([]byte, 32)
+		rand.Read(d)
+		addresses = append(addresses, d)
+		err := tree.Insert(d, d)
+		if err != nil {
+			b.Errorf("Failed to insert item %d: %v", i, err)
+		}
+		tree.Commit()
+	}
+}
+
+func BenchmarkVectorCommitmentTreeProve(b *testing.B) {
+	tree := &VectorCommitmentTree{}
+	addresses := [][]byte{}
+
+	for i := range b.N {
+		d := make([]byte, 32)
+		rand.Read(d)
+		addresses = append(addresses, d)
+		err := tree.Insert(d, d)
+		if err != nil {
+			b.Errorf("Failed to insert item %d: %v", i, err)
+		}
+		tree.Prove(d)
+	}
+}
+
+func BenchmarkVectorCommitmentTreeVerify(b *testing.B) {
+	tree := &VectorCommitmentTree{}
+	addresses := [][]byte{}
+
+	for i := range b.N {
+		d := make([]byte, 32)
+		rand.Read(d)
+		addresses = append(addresses, d)
+		err := tree.Insert(d, d)
+		if err != nil {
+			b.Errorf("Failed to insert item %d: %v", i, err)
+		}
+		p := tree.Prove(d)
+		if !tree.Verify(d, p) {
+			b.Errorf("bad proof")
+		}
+	}
+}
+
 func TestVectorCommitmentTrees(t *testing.T) {
 	bls48581.Init()
 	tree := &VectorCommitmentTree{}
@@ -147,23 +213,23 @@ func TestVectorCommitmentTrees(t *testing.T) {
 
 	tree = &VectorCommitmentTree{}
 
-	// Empty tree should have zero hash
-	emptyRoot := tree.Root()
-	if len(emptyRoot) != 64 {
-		t.Errorf("Expected 64 byte root hash, got %d bytes", len(emptyRoot))
+	// Empty tree should be empty
+	emptyRoot := tree.Root
+	if emptyRoot != nil {
+		t.Errorf("Expected empty root")
 	}
 
 	// Root should change after insert
 	tree.Insert([]byte("key1"), []byte("value1"))
-	firstRoot := tree.Root()
+	firstRoot := tree.Root.Commit()
 
-	if bytes.Equal(firstRoot, emptyRoot) {
+	if bytes.Equal(firstRoot, bytes.Repeat([]byte{0x00}, 64)) {
 		t.Error("Root hash should change after insert")
 	}
 
 	// Root should change after update
 	tree.Insert([]byte("key1"), []byte("value2"))
-	secondRoot := tree.Root()
+	secondRoot := tree.Root.Commit()
 
 	if bytes.Equal(secondRoot, firstRoot) {
 		t.Error("Root hash should change after update")
@@ -171,13 +237,14 @@ func TestVectorCommitmentTrees(t *testing.T) {
 
 	// Root should change after delete
 	tree.Delete([]byte("key1"))
-	thirdRoot := tree.Root()
+	thirdRoot := tree.Root
 
-	if !bytes.Equal(thirdRoot, emptyRoot) {
+	if thirdRoot != nil {
 		t.Error("Root hash should match empty tree after deleting all entries")
 	}
 
 	tree = &VectorCommitmentTree{}
+	cmptree := &VectorCommitmentTree{}
 
 	addresses := [][]byte{}
 
@@ -187,11 +254,21 @@ func TestVectorCommitmentTrees(t *testing.T) {
 		addresses = append(addresses, d)
 	}
 
-	// Insert 100 items
+	// Insert 1000 items
 	for i := 0; i < 1000; i++ {
 		key := addresses[i]
 		value := addresses[i]
 		err := tree.Insert(key, value)
+		if err != nil {
+			t.Errorf("Failed to insert item %d: %v", i, err)
+		}
+	}
+
+	// Insert 1000 items in reverse
+	for i := 999; i >= 0; i-- {
+		key := addresses[i]
+		value := addresses[i]
+		err := cmptree.Insert(key, value)
 		if err != nil {
 			t.Errorf("Failed to insert item %d: %v", i, err)
 		}
@@ -205,9 +282,23 @@ func TestVectorCommitmentTrees(t *testing.T) {
 		if err != nil {
 			t.Errorf("Failed to get item %d: %v", i, err)
 		}
+		cmpvalue, err := cmptree.Get(key)
+		if err != nil {
+			t.Errorf("Failed to get item %d: %v", i, err)
+		}
 		if !bytes.Equal(value, expected) {
 			t.Errorf("Item %d: expected %x, got %x", i, string(expected), string(value))
 		}
+		if !bytes.Equal(value, cmpvalue) {
+			t.Errorf("Item %d: expected %x, got %x", i, string(value), string(cmpvalue))
+		}
+	}
+
+	tcommit := tree.Root.Commit()
+	cmptcommit := cmptree.Root.Commit()
+
+	if !bytes.Equal(tcommit, cmptcommit) {
+		t.Errorf("tree mismatch, %x, %x", tcommit, cmptcommit)
 	}
 
 	proofs := tree.Prove(addresses[500])

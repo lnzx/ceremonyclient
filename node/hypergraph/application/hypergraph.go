@@ -1,7 +1,6 @@
 package application
 
 import (
-	"encoding/binary"
 	"errors"
 
 	"source.quilibrium.com/quilibrium/monorepo/node/p2p"
@@ -15,32 +14,36 @@ var ErrInvalidLocation = errors.New("invalid location")
 var ErrMissingExtrinsics = errors.New("missing extrinsics")
 var ErrIsExtrinsic = errors.New("is extrinsic")
 
+// Extract only needed methods of VEnc interface
+type Encrypted interface {
+	ToBytes() []byte
+	Verify(proof []byte) bool
+}
+
 type Vertex struct {
-	AppAddress   [32]byte
-	DataAddress  [32]byte
-	SegmentOrder uint16
+	AppAddress  [32]byte
+	DataAddress [32]byte
+	Data        Encrypted
 }
 
 type Hyperedge struct {
 	AppAddress  [32]byte
 	DataAddress [32]byte
-	Index       uint16
-	Extrinsics  map[[66]byte]Atom
+	Extrinsics  map[[64]byte]Atom
 }
 
 type Atom interface {
-	GetID() [66]byte
+	GetID() [64]byte
 	GetAtomType() AtomType
 	GetLocation() Location
 	GetAppAddress() [32]byte
 	GetDataAddress() [32]byte
 }
 
-func (v *Vertex) GetID() [66]byte {
-	id := [66]byte{}
+func (v *Vertex) GetID() [64]byte {
+	id := [64]byte{}
 	copy(id[:32], v.AppAddress[:])
 	copy(id[32:64], v.DataAddress[:])
-	binary.BigEndian.PutUint16(id[64:], v.SegmentOrder)
 	return id
 }
 
@@ -63,11 +66,10 @@ func (v *Vertex) GetDataAddress() [32]byte {
 	return v.DataAddress
 }
 
-func (h *Hyperedge) GetID() [66]byte {
-	id := [66]byte{}
+func (h *Hyperedge) GetID() [64]byte {
+	id := [64]byte{}
 	copy(id[:32], h.AppAddress[:])
 	copy(id[32:], h.DataAddress[:])
-	binary.BigEndian.PutUint16(id[64:], h.Index)
 	return id
 }
 
@@ -92,7 +94,7 @@ func (h *Hyperedge) GetDataAddress() [32]byte {
 
 type ShardAddress struct {
 	L1 [3]byte
-	L2 [48]byte
+	L2 [64]byte
 }
 
 func GetShardAddress(a Atom) ShardAddress {
@@ -101,17 +103,17 @@ func GetShardAddress(a Atom) ShardAddress {
 
 	return ShardAddress{
 		L1: [3]byte(p2p.GetBloomFilterIndices(appAddress[:], 256, 3)),
-		L2: [48]byte(p2p.GetBloomFilterIndices(append(append([]byte{}, appAddress[:]...), dataAddress[:]...), 65536, 24)),
+		L2: [64]byte(append(append([]byte{}, appAddress[:]...), dataAddress[:]...)),
 	}
 }
 
 type IdSet struct {
 	atomType AtomType
-	atoms    map[[66]byte]Atom
+	atoms    map[[64]byte]Atom
 }
 
 func NewIdSet(atomType AtomType) *IdSet {
-	return &IdSet{atomType: atomType, atoms: make(map[[66]byte]Atom)}
+	return &IdSet{atomType: atomType, atoms: make(map[[64]byte]Atom)}
 }
 
 func (set *IdSet) Add(atom Atom) error {
@@ -243,7 +245,7 @@ func (hg *Hypergraph) LookupAtom(a Atom) bool {
 	}
 }
 
-func (hg *Hypergraph) LookupAtomSet(atomSet map[[66]byte]Atom) bool {
+func (hg *Hypergraph) LookupAtomSet(atomSet map[[64]byte]Atom) bool {
 	for _, atom := range atomSet {
 		if !hg.LookupAtom(atom) {
 			return false

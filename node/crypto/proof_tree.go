@@ -17,8 +17,8 @@ func init() {
 }
 
 const (
-	BranchNodes = 1024
-	BranchBits  = 10 // log2(1024)
+	BranchNodes = 64
+	BranchBits  = 6 // log2(64)
 	BranchMask  = BranchNodes - 1
 )
 
@@ -73,7 +73,7 @@ func (n *VectorCommitmentBranchNode) Commit() []byte {
 			}
 		}
 
-		n.Commitment = rbls48581.CommitRaw(data, 1024)
+		n.Commitment = rbls48581.CommitRaw(data, 64)
 	}
 
 	return n.Commitment
@@ -103,7 +103,7 @@ func (n *VectorCommitmentBranchNode) Verify(index int, proof []byte) bool {
 			}
 		}
 
-		n.Commitment = rbls48581.CommitRaw(data, 1024)
+		n.Commitment = rbls48581.CommitRaw(data, 64)
 		data = data[64*index : 64*(index+1)]
 	} else {
 		child := n.Children[index]
@@ -127,7 +127,7 @@ func (n *VectorCommitmentBranchNode) Verify(index int, proof []byte) bool {
 		}
 	}
 
-	return rbls48581.VerifyRaw(data, n.Commitment, uint64(index), proof, 1024)
+	return rbls48581.VerifyRaw(data, n.Commitment, uint64(index), proof, 64)
 }
 
 func (n *VectorCommitmentBranchNode) Prove(index int) []byte {
@@ -153,7 +153,7 @@ func (n *VectorCommitmentBranchNode) Prove(index int) []byte {
 		}
 	}
 
-	return rbls48581.ProveRaw(data, uint64(index), 1024)
+	return rbls48581.ProveRaw(data, uint64(index), 64)
 }
 
 type VectorCommitmentTree struct {

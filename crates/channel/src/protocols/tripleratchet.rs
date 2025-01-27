@@ -48,6 +48,7 @@ pub struct PeerInfo {
     pub(crate) signed_pre_public_key: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub struct TripleRatchetParticipant {
     peer_key: Scalar,
     sending_ephemeral_private_key: Scalar,
@@ -694,6 +695,63 @@ impl TripleRatchetParticipant {
       Ok((plaintext, should_dkg_ratchet))
   }
 
+  pub fn ratchet_resize(&mut self, other: Vec<u8>, id: usize, total: usize) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+    if !self.async_dkg_ratchet {
+      return Err(Box::new(TripleRatchetError::CryptoError("cannot use non-async triple ratchet for resize".to_owned())));
+    }
+
+    if self.threshold != 2 {
+      return Err(Box::new(TripleRatchetError::CryptoError("cannot use larger threshold size than two for resize".to_owned())));
+    }
+
+    let rescaled = Feldman::redistribute(&mut OsRng, vec![self.dkg_ratchet.get_scalar().to_bytes().to_vec(), other], &vec![self.dkg_ratchet.get_id(), id], 2, total);
+
+    if rescaled.is_err() {
+      return Err(Box::new(rescaled.unwrap_err()));
+    }
+
+    return Ok(rescaled.unwrap());
+  }
+
+
+  pub fn point_verify(&mut self, point: Vec<u8>, id: usize) -> Result<bool, Box<dyn std::error::Error>> {
+    if !self.async_dkg_ratchet {
+      return Err(Box::new(TripleRatchetError::CryptoError("cannot use non-async triple ratchet for point verify".to_owned())));
+    }
+
+    if self.threshold != 2 {
+      return Err(Box::new(TripleRatchetError::CryptoError("cannot use larger threshold size than two for point verify".to_owned())));
+    }
+
+    if id == 0 {
+      return Err(Box::new(TripleRatchetError::CryptoError("invalid id".to_owned())))
+    }
+
+    let ours = (self.dkg_ratchet.get_scalar() * EdwardsPoint::generator()).compress();
+    let ours_bytes = ours.as_bytes();
+
+    let mut shares = Vec::<&[u8]>::new();
+    let mut ids = Vec::<usize>::new();
+
+    if self.dkg_ratchet.get_id() > id {
+      ids.push(id);
+      shares.push(&point);
+      ids.push(self.dkg_ratchet.get_id());
+      shares.push(ours_bytes);
+    } else {
+      ids.push(self.dkg_ratchet.get_id());
+      shares.push(ours_bytes);
+      ids.push(id);
+      shares.push(&point);
+    }
+
+    let result = self.dkg_ratchet.combine_mul_share(shares, ids.as_slice());
+    match result {
+      Ok(pubkey) => Ok(pubkey == self.dkg_ratchet.public_key_bytes()),
+      Err(e) => Err(Box::new(e))
+    }
+  }
+
   fn ratchet_sender_ephemeral_keys(&mut self) -> Result<(), Box<dyn std::error::Error>> {
       let receiving_group_key = self.receiving_group_key.as_ref().ok_or_else(|| TripleRatchetError::CryptoError("Receiving group key not set".into()))?;
       self.sending_ephemeral_private_key = Scalar::random(&mut OsRng);
@@ -823,16 +881,16 @@ impl TripleRatchetParticipant {
                   let current_header_key = rkck[32..64].to_vec();
                   match self.decrypt(ciphertext, &current_header_key, None) {
                       Ok(header) => Ok((header, true, true)),
-                      Err(e) => Err(Box::new(e)),
+                      Err(e) => Err(Box::new(TripleRatchetError::CryptoError(format!("header: {}", e.to_string())))),
                   }
               } else {
                   match self.decrypt(ciphertext, &self.next_header_key, None) {
                       Ok(header) => Ok((header, true, false)),
-                      Err(e) => Err(Box::new(e)),
+                      Err(e) => Err(Box::new(TripleRatchetError::CryptoError(format!("header: {}", e.to_string())))),
                   }
               }
           },
-          Err(e) => Err(Box::new(e)),
+          Err(e) => Err(Box::new(TripleRatchetError::CryptoError(format!("header: {}", e.to_string())))),
       }
   }
 

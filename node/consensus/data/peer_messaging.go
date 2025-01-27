@@ -666,3 +666,25 @@ func (e *DataClockConsensusEngine) GetPublicChannel(
 ) error {
 	return errors.New("not supported")
 }
+
+func GetAddressOfPreCoinProof(
+	proof *protobufs.PreCoinProof,
+) ([]byte, error) {
+	eval := []byte{}
+	eval = append(eval, application.TOKEN_ADDRESS...)
+	eval = append(eval, proof.Amount...)
+	eval = binary.BigEndian.AppendUint32(eval, proof.Index)
+	eval = append(eval, proof.IndexProof...)
+	eval = append(eval, proof.Commitment...)
+	eval = append(eval, proof.Proof...)
+	eval = binary.BigEndian.AppendUint32(eval, proof.Parallelism)
+	eval = binary.BigEndian.AppendUint32(eval, proof.Difficulty)
+	eval = binary.BigEndian.AppendUint32(eval, 0)
+	eval = append(eval, proof.Owner.GetImplicitAccount().Address...)
+	addressBI, err := poseidon.HashBytes(eval)
+	if err != nil {
+		return nil, err
+	}
+
+	return addressBI.FillBytes(make([]byte, 32)), nil
+}

@@ -16,7 +16,7 @@ pub enum FeldmanError {
     CryptoError(String),
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum FeldmanRound {
     Uninitialized,
     Initialized,
@@ -25,6 +25,7 @@ enum FeldmanRound {
     Reconstructed,
 }
 
+#[derive(Debug)]
 pub struct Feldman {
     threshold: usize,
     total: usize,
@@ -226,25 +227,13 @@ impl Feldman {
             return Err(FeldmanError::WrongRound);
         }
 
-        let mut coeffs = vec![self.secret];
-
-        for _ in 1..self.threshold {
-            coeffs.push(Scalar::random(rng));
-        }
+        let samples = Feldman::construct_polynomial_samples(rng, self.secret, self.threshold, self.total);
 
         for i in 1..=self.total {
-            let mut result = coeffs[0];
-            let x = Scalar::from(i as u32);
-
-            for j in 1..self.threshold {
-                let term = coeffs[j] * Scalar::from(i.pow(j as u32) as u32);
-                result += term;
-            }
-
             if i == self.id {
-                self.scalar = Some(result);
+                self.scalar = Some(samples[i-1]);
             } else {
-                self.frags_for_counterparties.insert(i, result.to_bytes().to_vec());
+                self.frags_for_counterparties.insert(i, samples[i-1].to_bytes().to_vec());
             }
         }
 
@@ -252,6 +241,29 @@ impl Feldman {
         Ok(())
     }
 
+    fn construct_polynomial_samples<R: RngCore + CryptoRng>(rng: &mut R, secret: Scalar, threshold: usize, total: usize) -> Vec<Scalar> {
+        let mut coeffs = vec![secret];
+    
+        for _ in 1..threshold {
+            coeffs.push(Scalar::random(rng));
+        }
+    
+        let mut samples = Vec::<Scalar>::new();
+        for i in 1..=total {
+            let mut result = coeffs[0];
+            let x = Scalar::from(i as u32);
+    
+            for j in 1..threshold {
+                let term = coeffs[j] * Scalar::from(i.pow(j as u32) as u32);
+                result += term;
+            }
+
+            samples.push(result);
+        }
+
+        return samples;
+    }
+    
     pub fn scalar(&self) -> Option<&Scalar> {
         self.scalar.as_ref()
     }
@@ -481,5 +493,51 @@ impl Feldman {
     pub fn public_key_bytes(&self) -> Vec<u8> {
         self.public_key.to_bytes().to_vec()
     }
-}
 
+    pub fn redistribute<R: RngCore + CryptoRng>(rng: &mut R, shares: Vec<Vec<u8>>, ids: &[usize], threshold: usize, total: usize) -> Result<Vec<Vec<u8>>, FeldmanError> {
+        if shares.len() != ids.len() {
+            return Err(FeldmanError::InvalidData("mismatch of shares and ids len".to_string()));
+        }
+
+        let mut points = HashMap::<usize, Scalar>::new();
+        for (i, share) in shares.iter().enumerate() {
+            let point = Scalar::from_bytes(&(*share).clone().try_into().unwrap());
+            if point.is_zero().into() {
+                return Err(FeldmanError::InvalidData(format!("invalid pubkey for {}", ids[i]).to_string()));
+            }
+
+            points.insert(ids[i], point);
+        }
+      
+        let mut reconstructed_sum = Scalar::ZERO;
+
+        for j in ids {
+            let mut num = Scalar::ONE;
+            let mut den = Scalar::ONE;
+
+            for k in ids {
+                if j != k {
+                    let j_scalar = Scalar::from(*j as u32);
+                    let k_scalar = Scalar::from(*k as u32);
+
+                    num *= k_scalar;
+                    den *= k_scalar - j_scalar;
+                }
+            }
+
+            let den_inv = den.invert();
+            let reconstructed_fragment = points[&j] * (num * den_inv);
+            reconstructed_sum += reconstructed_fragment;
+        }
+
+        return Ok(Feldman::construct_polynomial_samples(rng, reconstructed_sum, threshold, total).iter().map(|s| s.to_bytes().to_vec()).collect())
+    }
+
+    pub fn get_scalar(&self) -> Scalar {
+      return self.scalar.unwrap();
+    }
+
+    pub fn get_id(&self) -> usize {
+      return self.id;
+    }
+}

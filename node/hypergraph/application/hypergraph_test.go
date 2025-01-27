@@ -12,8 +12,8 @@ func TestHypergraph(t *testing.T) {
 
 	// Test vertex operations
 	t.Run("Vertex Operations", func(t *testing.T) {
-		v1 := &application.Vertex{AppAddress: [32]byte{1}, DataAddress: [32]byte{1}, SegmentOrder: 1}
-		v2 := &application.Vertex{AppAddress: [32]byte{1}, DataAddress: [32]byte{2}, SegmentOrder: 1}
+		v1 := &application.Vertex{AppAddress: [32]byte{1}, DataAddress: [32]byte{1}}
+		v2 := &application.Vertex{AppAddress: [32]byte{1}, DataAddress: [32]byte{2}}
 
 		// Add vertices
 		err := hg.AddVertex(v1)
@@ -48,15 +48,15 @@ func TestHypergraph(t *testing.T) {
 
 	// Test hyperedge operations
 	t.Run("Hyperedge Operations", func(t *testing.T) {
-		v3 := &application.Vertex{AppAddress: [32]byte{2}, DataAddress: [32]byte{1}, SegmentOrder: 1}
-		v4 := &application.Vertex{AppAddress: [32]byte{2}, DataAddress: [32]byte{2}, SegmentOrder: 1}
+		v3 := &application.Vertex{AppAddress: [32]byte{2}, DataAddress: [32]byte{1}}
+		v4 := &application.Vertex{AppAddress: [32]byte{2}, DataAddress: [32]byte{2}}
 		hg.AddVertex(v3)
 		hg.AddVertex(v4)
 
 		h1 := &application.Hyperedge{
 			AppAddress:  [32]byte{3},
 			DataAddress: [32]byte{1},
-			Extrinsics:  map[[66]byte]application.Atom{v3.GetID(): v3, v4.GetID(): v4},
+			Extrinsics:  map[[64]byte]application.Atom{v3.GetID(): v3, v4.GetID(): v4},
 		}
 
 		// Add hyperedge
@@ -82,15 +82,15 @@ func TestHypergraph(t *testing.T) {
 
 	// Test "within" relationship
 	t.Run("Within Relationship", func(t *testing.T) {
-		v5 := &application.Vertex{AppAddress: [32]byte{4}, DataAddress: [32]byte{1}, SegmentOrder: 1}
-		v6 := &application.Vertex{AppAddress: [32]byte{4}, DataAddress: [32]byte{2}, SegmentOrder: 1}
+		v5 := &application.Vertex{AppAddress: [32]byte{4}, DataAddress: [32]byte{1}}
+		v6 := &application.Vertex{AppAddress: [32]byte{4}, DataAddress: [32]byte{2}}
 		hg.AddVertex(v5)
 		hg.AddVertex(v6)
 
 		h2 := &application.Hyperedge{
 			AppAddress:  [32]byte{5},
 			DataAddress: [32]byte{1},
-			Extrinsics:  map[[66]byte]application.Atom{v5.GetID(): v5, v6.GetID(): v6},
+			Extrinsics:  map[[64]byte]application.Atom{v5.GetID(): v5, v6.GetID(): v6},
 		}
 		hg.AddHyperedge(h2)
 
@@ -101,7 +101,7 @@ func TestHypergraph(t *testing.T) {
 			t.Error("v6 should be within h2")
 		}
 
-		v7 := &application.Vertex{AppAddress: [32]byte{4}, DataAddress: [32]byte{3}, SegmentOrder: 1}
+		v7 := &application.Vertex{AppAddress: [32]byte{4}, DataAddress: [32]byte{3}}
 		hg.AddVertex(v7)
 		if hg.Within(v7, h2) {
 			t.Error("v7 should not be within h2")
@@ -110,20 +110,20 @@ func TestHypergraph(t *testing.T) {
 
 	// Test nested hyperedges
 	t.Run("Nested Hyperedges", func(t *testing.T) {
-		v8 := &application.Vertex{AppAddress: [32]byte{6}, DataAddress: [32]byte{1}, SegmentOrder: 1}
-		v9 := &application.Vertex{AppAddress: [32]byte{6}, DataAddress: [32]byte{2}, SegmentOrder: 1}
+		v8 := &application.Vertex{AppAddress: [32]byte{6}, DataAddress: [32]byte{1}}
+		v9 := &application.Vertex{AppAddress: [32]byte{6}, DataAddress: [32]byte{2}}
 		hg.AddVertex(v8)
 		hg.AddVertex(v9)
 
 		h3 := &application.Hyperedge{
 			AppAddress:  [32]byte{7},
 			DataAddress: [32]byte{1},
-			Extrinsics:  map[[66]byte]application.Atom{v8.GetID(): v8},
+			Extrinsics:  map[[64]byte]application.Atom{v8.GetID(): v8},
 		}
 		h4 := &application.Hyperedge{
 			AppAddress:  [32]byte{7},
 			DataAddress: [32]byte{2},
-			Extrinsics:  map[[66]byte]application.Atom{h3.GetID(): h3, v9.GetID(): v9},
+			Extrinsics:  map[[64]byte]application.Atom{h3.GetID(): h3, v9.GetID(): v9},
 		}
 		hg.AddHyperedge(h3)
 		hg.AddHyperedge(h4)
@@ -138,11 +138,11 @@ func TestHypergraph(t *testing.T) {
 
 	// Test error cases
 	t.Run("Error Cases", func(t *testing.T) {
-		v10 := &application.Vertex{AppAddress: [32]byte{8}, DataAddress: [32]byte{1}, SegmentOrder: 1}
+		v10 := &application.Vertex{AppAddress: [32]byte{8}, DataAddress: [32]byte{1}}
 		h5 := &application.Hyperedge{
 			AppAddress:  [32]byte{8},
 			DataAddress: [32]byte{2},
-			Extrinsics:  map[[66]byte]application.Atom{v10.GetID(): v10},
+			Extrinsics:  map[[64]byte]application.Atom{v10.GetID(): v10},
 		}
 
 		// Try to add hyperedge with non-existent vertex
@@ -164,8 +164,8 @@ func TestHypergraph(t *testing.T) {
 
 	// Test sharding
 	t.Run("Sharding", func(t *testing.T) {
-		v11 := &application.Vertex{AppAddress: [32]byte{9}, DataAddress: [32]byte{1}, SegmentOrder: 1}
-		v12 := &application.Vertex{AppAddress: [32]byte{9}, DataAddress: [32]byte{2}, SegmentOrder: 1}
+		v11 := &application.Vertex{AppAddress: [32]byte{9}, DataAddress: [32]byte{1}}
+		v12 := &application.Vertex{AppAddress: [32]byte{9}, DataAddress: [32]byte{2}}
 		hg.AddVertex(v11)
 		hg.AddVertex(v12)
 
