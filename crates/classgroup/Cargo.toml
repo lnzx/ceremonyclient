@@ -21,6 +21,9 @@ repository = "https://github.com/poanetwork/vdf"
 license = "Apache-2.0"
 edition = "2018"
 
+[build-dependencies]
+cc = "1.0"
+
 [dependencies]
 num-traits = "0.2"
 libc = "0.2"

@@ -24,7 +24,11 @@ use libc::{c_int, c_long, c_ulong, c_void, size_t};
 // pub use c_ulong;
 use std::{mem, usize};
 // We use the unsafe versions to avoid unecessary allocations.
-#[link(name = "gmp", kind = "static")]
+extern "C" {
+    fn adapted_nudupl(a: *mut Mpz, b: *mut Mpz, c: *mut Mpz, times: c_ulong);
+}
+// We use the unsafe versions to avoid unecessary allocations.
+#[link(name = "gmp")]
 extern "C" {
     fn __gmpz_gcdext(gcd: *mut Mpz, s: *mut Mpz, t: *mut Mpz, a: *const Mpz, b: *const Mpz);
     fn __gmpz_gcd(rop: *mut Mpz, op1: *const Mpz, op2: *const Mpz);
@@ -33,8 +37,18 @@ extern "C" {
     fn __gmpz_divexact(q: *mut Mpz, n: *const Mpz, d: *const Mpz);
     fn __gmpz_tdiv_q(q: *mut Mpz, n: *const Mpz, d: *const Mpz);
     fn __gmpz_mul(p: *mut Mpz, a: *const Mpz, b: *const Mpz);
+    fn __gmpz_mod(p: *mut Mpz, a: *const Mpz, b: *const Mpz);
+    fn __gmpz_neg(rop: *mut Mpz, op: *const Mpz);
+    fn __gmpz_mul_ui(p: *mut Mpz, a: *const Mpz, b: c_ulong);
+    fn __gmpz_addmul(rop: *mut Mpz, op1: *const Mpz, op2: *const Mpz);
+    fn __gmpz_set(rop: *mut Mpz, op: *const Mpz);
+    //fn __fmpz_set_mpz(rop: *mut Mpz, op: *const Mpz);
+    //fn __fmpz_get_mpz(rop: *mut Mpz, op: *const Mpz);
+    fn __gmpz_cmpabs(rop: *const Mpz, op: *const Mpz) -> usize;
+    //fn __gmpz_sgn(rop: *const Mpz) -> usize;
     fn __gmpz_mul_2exp(rop: *mut Mpz, op1: *const Mpz, op2: mp_bitcnt_t);
     fn __gmpz_sub(rop: *mut Mpz, op1: *const Mpz, op2: *const Mpz);
+    fn __gmpz_submul(rop: *mut Mpz, op1: *const Mpz, op2: *const Mpz);
     fn __gmpz_import(
         rop: *mut Mpz,
         count: size_t,
@@ -114,6 +128,16 @@ pub fn mpz_gcdext(gcd: &mut Mpz, s: &mut Mpz, t: &mut Mpz, a: &Mpz, b: &Mpz) {
     unsafe { __gmpz_gcdext(gcd, s, t, a, b) }
 }
 
+//#[inline]
+//pub fn fmpz_xgcd_partial(gcd: &mut Mpz, s: &mut Mpz, t: &mut Mpz, a: &Mpz, b: &Mpz) {
+//    unsafe { __fmpz_xgcd_partial(gcd, s, t, a, b) }
+//}
+
+#[inline]
+pub fn mpz_gcdext_null(gcd: &mut Mpz, s: &mut Mpz, a: &Mpz, b: &Mpz) {
+    unsafe { __gmpz_gcdext(gcd, s, std::ptr::null_mut(), a, b) }
+}
+
 /// Doubles `rop` in-place
 #[inline]
 pub fn mpz_double(rop: &mut Mpz) {
@@ -183,6 +207,63 @@ pub fn mpz_add(rop: &mut Mpz, op1: &Mpz, op2: &Mpz) {
 #[inline]
 pub fn mpz_mul(rop: &mut Mpz, op1: &Mpz, op2: &Mpz) {
     unsafe { __gmpz_mul(rop, op1, op2) }
+}
+
+#[inline]
+pub fn mpz_mod(rop: &mut Mpz, op1: &Mpz, op2: &Mpz) {
+    unsafe { __gmpz_mod(rop, op1, op2) }
+}
+
+#[inline]
+pub fn mpz_submul(rop: &mut Mpz, op1: &Mpz, op2: *const Mpz) {
+    unsafe { __gmpz_submul(rop, op1, op2) }
+}
+
+#[inline]
+pub fn mpz_addmul(rop: &mut Mpz, op1: &Mpz, op2: *const Mpz) {
+    unsafe { __gmpz_addmul(rop, op1, op2) }
+}
+
+#[inline]
+pub fn mpz_mul_ui(rop: &mut Mpz, op1: &Mpz, op2: u64) {
+    unsafe { __gmpz_mul_ui(rop, op1, op2) }
+}
+
+//#[inline]
+//pub fn mpz_sgn(rop: &Mpz) -> usize {
+//    unsafe { __gmpz_sgn(rop) }
+//}
+
+#[inline]
+pub fn gmp_nudupl(a: &mut Mpz, b: &mut Mpz, c: &mut Mpz, times: u64) {
+    unsafe {
+        adapted_nudupl(a, b, c, times);
+    }
+}
+
+#[inline]
+pub fn mpz_cmpabs(rop: &Mpz, op1: &Mpz) -> usize {
+    unsafe { __gmpz_cmpabs(rop, op1) }
+}
+
+//#[inline]
+//pub fn fmpz_get_mpz(rop: &mut Mpz, op1: &Mpz) {
+//    unsafe { __fmpz_get_mpz(rop, op1) }
+//}
+//
+//#[inline]
+//pub fn fmpz_set_mpz(rop: &mut Mpz, op1: &Mpz) {
+//    unsafe { __fmpz_set_mpz(rop, op1) }
+//}
+
+#[inline]
+pub fn mpz_set(rop: &mut Mpz, op1: &Mpz) {
+    unsafe { __gmpz_set(rop, op1) }
+}
+
+#[inline]
+pub fn mpz_neg(rop: &mut Mpz, op1: &Mpz) {
+    unsafe { __gmpz_neg(rop, op1) }
 }
 
 #[inline]

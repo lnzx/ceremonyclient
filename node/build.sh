@@ -19,14 +19,15 @@ case "$os_type" in
         # Check if the architecture is ARM
         if [[ "$(uname -m)" == "arm64" ]]; then
             # MacOS ld doesn't support -Bstatic and -Bdynamic, so it's important that there is only a static version of the library
-            go build -ldflags "-linkmode 'external' -extldflags '-L$BINARIES_DIR -lvdf -lbls48581 -ldl -lm'" "$@"
+            go build -ldflags "-linkmode 'external' -extldflags '-L$BINARIES_DIR -lbls48581 -lvdf -ldl -lm -lflint -lgmp -lmpfr'" "$@"
         else
             echo "Unsupported platform"
             exit 1
         fi
         ;;
     "Linux")
-        go build -ldflags "-linkmode 'external' -extldflags '-L$BINARIES_DIR -Wl,-Bstatic -lvdf -lbls48581 -Wl,-Bdynamic -ldl -lm'" "$@"
+        export CGO_LDFLAGS="-L/usr/local/lib -lflint -lgmp -lmpfr -ldl -lm -L$BINARIES_DIR -lvdf -lbls48581 -static"
+	go build -ldflags "-linkmode 'external'" "$@"
         ;;
     *)
         echo "Unsupported platform"
