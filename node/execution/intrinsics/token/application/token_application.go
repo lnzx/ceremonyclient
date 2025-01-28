@@ -209,7 +209,7 @@ func (a *TokenApplication) ApplyTransitions(
 				continue
 			} else if len(t.Mint.Proofs) >= 3 && currentFrameNumber > PROOF_FRAME_CUTOFF {
 				frameNumber := binary.BigEndian.Uint64(t.Mint.Proofs[2])
-				if frameNumber < currentFrameNumber-2 {
+				if frameNumber < currentFrameNumber-1 {
 					fails[i] = transition
 					continue
 				}

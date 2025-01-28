@@ -117,7 +117,7 @@ func (e *DataClockConsensusEngine) validateTxMessage(peerID peer.ID, message *pb
 			if err != nil {
 				panic(err)
 			}
-			if frameNumber+2 < head.FrameNumber {
+			if frameNumber+1 < head.FrameNumber {
 				return p2p.ValidationResultIgnore
 			}
 		}

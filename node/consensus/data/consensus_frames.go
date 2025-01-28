@@ -74,6 +74,7 @@ func (e *DataClockConsensusEngine) syncWithMesh() error {
 func (e *DataClockConsensusEngine) prove(
 	previousFrame *protobufs.ClockFrame,
 ) (*protobufs.ClockFrame, error) {
+	time.Sleep(40 * time.Second)
 	if e.lastProven >= previousFrame.FrameNumber && e.lastProven != 0 {
 		return previousFrame, nil
 	}

@@ -348,7 +348,7 @@ func NewTokenExecutionEngine(
 	e.provingKeyAddress = provingKeyAddress
 
 	frame, _, err := e.clockStore.GetLatestDataClockFrame(e.intrinsicFilter)
-	if err != nil || frame.FrameNumber < 184479 {
+	if err != nil || frame.FrameNumber < 186405 {
 		e.rebuildStateTree()
 	} else {
 		e.stateTree, err = e.clockStore.GetDataStateTree(e.intrinsicFilter)
@@ -457,7 +457,7 @@ func (e *TokenExecutionEngine) rebuildStateTree() {
 
 	e.logger.Info("committing state tree")
 
-	root := e.stateTree.Commit()
+	root := e.stateTree.Commit(true)
 
 	e.logger.Info(
 		"committed state tree",
@@ -1049,7 +1049,7 @@ func (e *TokenExecutionEngine) ProcessFrame(
 
 	e.logger.Info("committing state tree")
 
-	root := stateTree.Commit()
+	root := stateTree.Commit(false)
 
 	e.logger.Info(
 		"commited state tree",

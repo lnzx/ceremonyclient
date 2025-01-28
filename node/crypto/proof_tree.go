@@ -23,7 +23,7 @@ const (
 )
 
 type VectorCommitmentNode interface {
-	Commit() []byte
+	Commit(recalculate bool) []byte
 }
 
 type VectorCommitmentLeafNode struct {
@@ -38,8 +38,8 @@ type VectorCommitmentBranchNode struct {
 	Commitment []byte
 }
 
-func (n *VectorCommitmentLeafNode) Commit() []byte {
-	if n.Commitment == nil {
+func (n *VectorCommitmentLeafNode) Commit(recalculate bool) []byte {
+	if n.Commitment == nil || recalculate {
 		h := sha512.New()
 		h.Write([]byte{0})
 		h.Write(n.Key)
@@ -49,12 +49,12 @@ func (n *VectorCommitmentLeafNode) Commit() []byte {
 	return n.Commitment
 }
 
-func (n *VectorCommitmentBranchNode) Commit() []byte {
-	if n.Commitment == nil {
+func (n *VectorCommitmentBranchNode) Commit(recalculate bool) []byte {
+	if n.Commitment == nil || recalculate {
 		data := []byte{}
 		for _, child := range n.Children {
 			if child != nil {
-				out := child.Commit()
+				out := child.Commit(recalculate)
 				switch c := child.(type) {
 				case *VectorCommitmentBranchNode:
 					h := sha512.New()
@@ -84,7 +84,7 @@ func (n *VectorCommitmentBranchNode) Verify(index int, proof []byte) bool {
 	if n.Commitment == nil {
 		for _, child := range n.Children {
 			if child != nil {
-				out := child.Commit()
+				out := child.Commit(false)
 				switch c := child.(type) {
 				case *VectorCommitmentBranchNode:
 					h := sha512.New()
@@ -108,7 +108,7 @@ func (n *VectorCommitmentBranchNode) Verify(index int, proof []byte) bool {
 	} else {
 		child := n.Children[index]
 		if child != nil {
-			out := child.Commit()
+			out := child.Commit(false)
 			switch c := child.(type) {
 			case *VectorCommitmentBranchNode:
 				h := sha512.New()
@@ -134,7 +134,7 @@ func (n *VectorCommitmentBranchNode) Prove(index int) []byte {
 	data := []byte{}
 	for _, child := range n.Children {
 		if child != nil {
-			out := child.Commit()
+			out := child.Commit(false)
 			switch c := child.(type) {
 			case *VectorCommitmentBranchNode:
 				h := sha512.New()
@@ -416,13 +416,14 @@ func (t *VectorCommitmentTree) Delete(key []byte) error {
 		return errors.New("empty key not allowed")
 	}
 
-	var delete func(node VectorCommitmentNode, depth int) VectorCommitmentNode
-	delete = func(node VectorCommitmentNode, depth int) VectorCommitmentNode {
+	var remove func(node VectorCommitmentNode, depth int) VectorCommitmentNode
+	remove = func(node VectorCommitmentNode, depth int) VectorCommitmentNode {
 		if node == nil {
 			return nil
 		}
 
 		switch n := node.(type) {
+
 		case *VectorCommitmentLeafNode:
 			if bytes.Equal(n.Key, key) {
 				return nil
@@ -430,63 +431,66 @@ func (t *VectorCommitmentTree) Delete(key []byte) error {
 			return n
 
 		case *VectorCommitmentBranchNode:
-			// Check prefix match
 			for i, expectedNibble := range n.Prefix {
 				currentNibble := getNextNibble(key, depth+i*BranchBits)
 				if currentNibble != expectedNibble {
-					return n // Key doesn't match prefix, nothing to delete
+					return n
 				}
 			}
 
-			// Delete at final position after prefix
 			finalNibble := getNextNibble(key, depth+len(n.Prefix)*BranchBits)
-			n.Children[finalNibble] = delete(n.Children[finalNibble], depth+len(n.Prefix)*BranchBits+BranchBits)
+			n.Children[finalNibble] =
+				remove(n.Children[finalNibble], depth+len(n.Prefix)*BranchBits+BranchBits)
+
 			n.Commitment = nil
 
-			// Count remaining children
 			childCount := 0
 			var lastChild VectorCommitmentNode
-			var lastIndex int
+			var lastChildIndex int
 			for i, child := range n.Children {
 				if child != nil {
 					childCount++
 					lastChild = child
-					lastIndex = i
+					lastChildIndex = i
 				}
 			}
 
-			if childCount == 0 {
+			switch childCount {
+			case 0:
 				return nil
-			} else if childCount == 1 {
-				// If the only child is a leaf, keep structure if its path matches
-				if leaf, ok := lastChild.(*VectorCommitmentLeafNode); ok {
-					if lastIndex == getLastNibble(leaf.Key, len(n.Prefix)) {
-						return n
-					}
-					return leaf
-				}
-				// If it's a branch, merge the prefixes
-				if branch, ok := lastChild.(*VectorCommitmentBranchNode); ok {
-					branch.Prefix = append(n.Prefix, branch.Prefix...)
-					return branch
-				}
-			}
-			return n
-		}
+			case 1:
+				if childBranch, ok := lastChild.(*VectorCommitmentBranchNode); ok {
+					// Merge:
+					//   n.Prefix + [lastChildIndex] + childBranch.Prefix
+					mergedPrefix := make([]int, 0, len(n.Prefix)+1+len(childBranch.Prefix))
+					mergedPrefix = append(mergedPrefix, n.Prefix...)
+					mergedPrefix = append(mergedPrefix, lastChildIndex)
+					mergedPrefix = append(mergedPrefix, childBranch.Prefix...)
 
-		return nil
+					childBranch.Prefix = mergedPrefix
+					childBranch.Commitment = nil
+					return childBranch
+				}
+
+				return lastChild
+			default:
+				return n
+			}
+		default:
+			return node
+		}
 	}
 
-	t.Root = delete(t.Root, 0)
+	t.Root = remove(t.Root, 0)
 	return nil
 }
 
 // Commit returns the root of the tree
-func (t *VectorCommitmentTree) Commit() []byte {
+func (t *VectorCommitmentTree) Commit(recalculate bool) []byte {
 	if t.Root == nil {
 		return make([]byte, 64)
 	}
-	return t.Root.Commit()
+	return t.Root.Commit(recalculate)
 }
 
 func debugNode(node VectorCommitmentNode, depth int, prefix string) {
