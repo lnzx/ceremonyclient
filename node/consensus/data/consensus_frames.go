@@ -411,22 +411,41 @@ func (e *DataClockConsensusEngine) syncWithPeer(
 			zap.Uint64("frame_number", response.ClockFrame.FrameNumber),
 			zap.Duration("frame_age", frametime.Since(response.ClockFrame)),
 		)
+
 		if !e.IsInProverTrie(
 			response.ClockFrame.GetPublicKeySignatureEd448().PublicKey.KeyValue,
 		) {
 			cooperative = false
 		}
+
 		if err := e.frameProver.VerifyDataClockFrame(
 			response.ClockFrame,
 		); err != nil {
 			return latest, doneChs, errors.Wrap(err, "sync")
 		}
+
+		// Useful for testnet, immediately handles equivocation from multiple
+		// genesis events:
+		if response.ClockFrame.FrameNumber == 1 {
+			genesis, _, _ := e.clockStore.GetDataClockFrame(e.filter, 0, true)
+			selector, _ := genesis.GetSelector()
+			if !bytes.Equal(
+				response.ClockFrame.ParentSelector,
+				selector.FillBytes(make([]byte, 32)),
+			) {
+				cooperative = false
+				return latest, doneChs, errors.Wrap(errors.New("invalid frame"), "sync")
+			}
+		}
+
 		doneCh, err := e.dataTimeReel.Insert(e.ctx, response.ClockFrame)
 		if err != nil {
 			return latest, doneChs, errors.Wrap(err, "sync")
 		}
+
 		doneChs = append(doneChs, doneCh)
 		latest = response.ClockFrame
+
 		if latest.FrameNumber >= maxFrame {
 			return latest, doneChs, nil
 		}

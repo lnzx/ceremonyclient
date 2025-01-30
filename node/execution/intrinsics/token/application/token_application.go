@@ -414,6 +414,9 @@ func (a *TokenApplication) ApplyTransitions(
 	wg.Wait()
 
 	for i, transition := range set {
+		if transition == nil {
+			continue
+		}
 		if fails[i] != nil {
 			continue
 		}
