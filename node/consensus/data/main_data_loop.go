@@ -120,6 +120,10 @@ outer:
 				continue
 			}
 
+			if head.FrameNumber <= maxFrames {
+				continue
+			}
+
 			to := head.FrameNumber - maxFrames
 			for i := from; i < to; i += batchSize {
 				start, stop := i, min(i+batchSize, to)
