@@ -262,6 +262,7 @@ func (t *VectorCommitmentTree) Insert(key, value []byte) error {
 						return newBranch
 					}
 				}
+
 				// Key matches prefix, continue with final nibble
 				finalNibble := getNextNibble(key, depth+len(n.Prefix)*BranchBits)
 				n.Children[finalNibble] = insert(n.Children[finalNibble], depth+len(n.Prefix)*BranchBits+BranchBits)

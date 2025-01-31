@@ -436,7 +436,11 @@ func (e *TokenExecutionEngine) rebuildStateTree() {
 		panic(err)
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
-		e.stateTree.Insert(iter.Key()[2:], iter.Value())
+		key := make([]byte, len(iter.Key()[2:]))
+		value := make([]byte, len(iter.Value()))
+		copy(key, iter.Key()[2:])
+		copy(value, iter.Value())
+		e.stateTree.Insert(key, value)
 	}
 	iter.Close()
 
@@ -445,7 +449,11 @@ func (e *TokenExecutionEngine) rebuildStateTree() {
 		panic(err)
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
-		e.stateTree.Insert(iter.Key()[2:], iter.Value())
+		key := make([]byte, len(iter.Key()[2:]))
+		value := make([]byte, len(iter.Value()))
+		copy(key, iter.Key()[2:])
+		copy(value, iter.Value())
+		e.stateTree.Insert(key, value)
 	}
 	iter.Close()
 	e.logger.Info("saving rebuilt state tree")

@@ -45,10 +45,12 @@ func (a *TokenApplication) handleDataAnnounceProverJoin(
 	error,
 ) {
 	if currentFrameNumber < PROOF_FRAME_CUTOFF {
+		a.Logger.Debug("join earlier than cutoff", zap.Uint64("current_frame", currentFrameNumber), zap.Uint64("cutoff", PROOF_FRAME_CUTOFF))
 		return nil, errors.Wrap(ErrInvalidStateTransition, "handle join")
 	}
 
 	if err := t.Validate(); err != nil {
+		a.Logger.Debug("invalid join", zap.Error(err))
 		return nil, errors.Wrap(ErrInvalidStateTransition, "handle join")
 	}
 
@@ -94,6 +96,7 @@ func (a *TokenApplication) handleDataAnnounceProverJoin(
 	if t.Announce != nil {
 		outputs, err = a.handleAnnounce(currentFrameNumber, lockMap, t.Announce)
 		if err != nil {
+			a.Logger.Debug("bad announce", zap.Error(err))
 			return nil, errors.Wrap(ErrInvalidStateTransition, "handle join")
 		}
 	}
