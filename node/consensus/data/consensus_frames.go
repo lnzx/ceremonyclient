@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/sha3"
@@ -527,8 +528,41 @@ func (e *DataClockConsensusEngine) initiateProvers(
 				zap.Duration("frame_age", frametime.Since(latestFrame)),
 			)
 
-			if err := e.publishMessage(e.txFilter, mint.TokenRequest()); err != nil {
-				e.logger.Error("could not publish mint", zap.Error(err))
+			var wg sync.WaitGroup
+			errCh := make(chan error, 2) // 用于接收错误
+			// 启动两个 Goroutine 并行发送请求
+			for i := 0; i < 2; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err = e.publishMessage(e.txFilter, mint.TokenRequest()); err != nil {
+						errCh <- err // 发送错误到 Channel
+						return
+					}
+					errCh <- nil // 成功时发送 nil
+				}()
+			}
+			// 等待所有 Goroutine 完成
+			wg.Wait()
+			close(errCh) // 关闭 Channel
+
+			// 检查是否有成功的请求
+			success := false
+			for err = range errCh {
+				if err == nil {
+					success = true                                // 只要有一个成功，就标记为成功
+					e.logger.Info("at least one publish mint ok") // 输出成功日志
+				} else {
+					e.logger.Error("could not publish mint", zap.Error(err))
+				}
+			}
+
+			// 如果所有请求都失败，进行重试
+			if !success {
+				e.logger.Info("all parallel publish mint failed, retrying once")
+				if err = e.publishMessage(e.txFilter, mint.TokenRequest()); err != nil {
+					e.logger.Error("retry could not publish mint", zap.Error(err))
+				}
 			}
 
 			if e.config.Engine.AutoMergeCoins {

@@ -763,7 +763,7 @@ func (e *DataClockConsensusEngine) GetState() consensus.EngineState {
 }
 
 func (
-	e *DataClockConsensusEngine,
+e *DataClockConsensusEngine,
 ) GetPeerInfo() *protobufs.PeerInfoResponse {
 	resp := &protobufs.PeerInfoResponse{}
 	e.peerMapMx.RLock()
@@ -863,7 +863,7 @@ func (e *DataClockConsensusEngine) connectToClient(
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(e.ctx, 1*time.Second)
+	ctx, cancel := context.WithTimeout(e.ctx, 5*time.Second)
 	defer cancel()
 	conn, err := qgrpc.DialContext(
 		ctx,
